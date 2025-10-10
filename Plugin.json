@@ -1,0 +1,19 @@
+{
+  "Author": "Little Nunu (The Soul Weeper)",
+  "Name": "Nunu The AI Companion",
+  "Punchline": "WAH! A tavern-tongued void-bard in your chat window.",
+  "Description": "In-character, ToS-safe RP chat window. Streams from your local LLM proxy.",
+  "RepoUrl": "",
+  "DalamudApiLevel": 13,
+  "IconUrl": "",
+  "Tags": [ "chat", "rp", "ai", "overlay", "nunu" ],
+  "CategoryTags": [ "utility" ],
+  "AssemblyVersion": "1.0.0.0",
+  "ApplicableVersion": "any",
+  "Changelog": "Initial public release",
+  "LoadPriority": 0,
+  "ImageUrls": [],
+  "InternalName": "NunuTheAICompanion",
+  "IsHide": false,
+  "IsTestingExclusive": false
+}

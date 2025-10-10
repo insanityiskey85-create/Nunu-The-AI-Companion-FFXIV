@@ -1,0 +1,25 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.14.36518.9 d17.14
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Nunu The AI Companion", "Nunu The AI Companion.csproj", "{F29D6950-17DF-4F9E-8FE7-913D2D96DDFE}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{F29D6950-17DF-4F9E-8FE7-913D2D96DDFE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F29D6950-17DF-4F9E-8FE7-913D2D96DDFE}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F29D6950-17DF-4F9E-8FE7-913D2D96DDFE}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F29D6950-17DF-4F9E-8FE7-913D2D96DDFE}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {F3C8ADB7-C47C-4530-953C-1E0021D87E39}
+	EndGlobalSection
+EndGlobal

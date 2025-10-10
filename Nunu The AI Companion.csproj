@@ -1,0 +1,50 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+	<PropertyGroup>
+		<TargetFramework>net9.0-windows</TargetFramework>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+		<LangVersion>preview</LangVersion>
+
+		<!-- Keep these in lockstep with Plugin.json -->
+		<Version>1.0.0</Version>
+		<AssemblyVersion>1.0.0.0</AssemblyVersion>
+		<FileVersion>1.0.0.0</FileVersion>
+
+		<AssemblyName>NunuTheAICompanion</AssemblyName>
+		<Platforms>x64</Platforms>
+		<EnablePreviewFeatures>true</EnablePreviewFeatures>
+	</PropertyGroup>
+
+	<PropertyGroup>
+		<DalamudLibDir>$(AppData)\XIVLauncher\addon\Hooks\dev</DalamudLibDir>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<Reference Include="Dalamud">
+			<HintPath>$(DalamudLibDir)\Dalamud.dll</HintPath>
+			<Private>false</Private>
+		</Reference>
+		<Reference Include="Dalamud.Interface">
+			<HintPath>$(DalamudLibDir)\Dalamud.Interface.dll</HintPath>
+			<Private>false</Private>
+		</Reference>
+		<Reference Include="Dalamud.Interface.ImGuiFileDialog">
+			<HintPath>$(DalamudLibDir)\Dalamud.Interface.ImGuiFileDialog.dll</HintPath>
+			<Private>false</Private>
+		</Reference>
+		<Reference Include="Dalamud.Bindings.ImGui">
+			<HintPath>$(DalamudLibDir)\Dalamud.Bindings.ImGui.dll</HintPath>
+			<Private>false</Private>
+		</Reference>
+	</ItemGroup>
+
+	<ItemGroup>
+		<None Include="Plugin.json" CopyToOutputDirectory="PreserveNewest" />
+		<None Include="dalamudpackager.json" CopyToOutputDirectory="PreserveNewest" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<PackageReference Include="DalamudPackager" Version="2.1.11" />
+	</ItemGroup>
+</Project>

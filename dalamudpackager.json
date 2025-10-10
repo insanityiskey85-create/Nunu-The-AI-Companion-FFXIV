@@ -1,0 +1,14 @@
+{
+  "Author": "Little Nunu",
+  "Name": "Nunu The AI Companion",
+  "Punchline": "Soul-stitched chat overlay.",
+  "Description": "Streams RP responses from a local LLM proxy (Ollama-ready).",
+  "RepoUrl": "",
+  "DalamudApiLevel": 13,
+  "Tags": ["chat", "rp", "ai"],
+  "InternalName": "NunuTheAICompanion",
+  "IsHide": false,
+  "IconUrl": "",
+  "Version": "1.0.0.0"
+}
+
