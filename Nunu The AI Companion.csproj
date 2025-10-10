@@ -6,9 +6,9 @@
 		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 		<LangVersion>preview</LangVersion>
 
-		<Version>1.0.0.7</Version>
-		<AssemblyVersion>1.0.0.7</AssemblyVersion>
-		<FileVersion>1.0.0.7</FileVersion>
+		<Version>1.0.0.8</Version>
+		<AssemblyVersion>1.0.0.8</AssemblyVersion>
+		<FileVersion>1.0.0.8</FileVersion>
 
 		<AssemblyName>NunuTheAICompanion</AssemblyName>
 		<Platforms>x64</Platforms>
