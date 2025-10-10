@@ -17,7 +17,7 @@
       "ImageUrls": [
         "https://raw.githubusercontent.com/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV/master/screenshot1.png"
       ],
-      "IconUrl": "https://raw.githubusercontent.com/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV/master/icon.png",
+      "IconUrl": "https://raw.githubusercontent.com/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV/master/WOW.png",
 
       "Changelog": "Initial public release with memory window, config UI, and streaming chat.",
       "IsHide": false,
