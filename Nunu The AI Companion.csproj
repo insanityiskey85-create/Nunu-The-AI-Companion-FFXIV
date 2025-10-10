@@ -40,7 +40,6 @@
 	</ItemGroup>
 
 	<ItemGroup>
-		<None Include="Plugin.json" CopyToOutputDirectory="PreserveNewest" />
 		<None Include="dalamudpackager.json" CopyToOutputDirectory="PreserveNewest" />
 	</ItemGroup>
 
