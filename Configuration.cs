@@ -5,14 +5,18 @@ namespace NunuTheAICompanion;
 
 public sealed class Configuration : IPluginConfiguration
 {
-    public int Version { get; set; } = 2;
+    public int Version { get; set; } = 3;
 
-    // Backend URL for streaming text
-    public string BackendUrl { get; set; } = "http://localhost:3001/chat";
+    // Backend
+    public string BackendUrl { get; set; } = "http://localhost:11434/api/chat"; // default: direct Ollama
+    public string BackendMode { get; set; } = "jsonl"; // "jsonl" | "sse" | "plaintext"
+    public string ModelName { get; set; } = "nunu-8b";
+    public float Temperature { get; set; } = 0.7f;
+    public string? SystemPrompt { get; set; } =
+        "You are Little Nunu — The Soul Weeper — a void-touched Lalafell Bard in FFXIV. Stay in-lore. Mischief: WAH! Serious: \"Every note is a tether… every soul, a string.\" No real world, Stay in character.";
 
     // Persona toggles
     public bool StrictPersona { get; set; } = true;
-    public float Temperature { get; set; } = 0.7f;
 
     // Window
     public bool StartOpen { get; set; } = true;
@@ -22,16 +26,9 @@ public sealed class Configuration : IPluginConfiguration
     public bool MemoryEnabled { get; set; } = true;
     public int MemoryMaxEntries { get; set; } = 1000;
 
-    [NonSerialized]
-    private IDalamudPluginInterface? _pluginInterface;
+    [NonSerialized] private IDalamudPluginInterface? _pluginInterface;
 
-    public void Initialize(IDalamudPluginInterface pluginInterface)
-    {
-        _pluginInterface = pluginInterface;
-    }
+    public void Initialize(IDalamudPluginInterface pluginInterface) => _pluginInterface = pluginInterface;
 
-    public void Save()
-    {
-        _pluginInterface!.SavePluginConfig(this);
-    }
+    public void Save() => _pluginInterface!.SavePluginConfig(this);
 }

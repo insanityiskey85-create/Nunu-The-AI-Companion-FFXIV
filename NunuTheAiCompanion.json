@@ -5,7 +5,7 @@
   "Description": "In-character, ToS-safe RP chat window. Streams from your local LLM proxy.",
   "RepoUrl": "https://github.com/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV",
   "DalamudApiLevel": 13,
-  "IconUrl": "",
+  "IconUrl": "https://raw.githubusercontent.com/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV/master/WOW.png",
   "Tags": [ "chat", "rp", "ai", "overlay", "nunu" ],
   "CategoryTags": [ "utility" ],
   "AssemblyVersion": "1.0.0.3",

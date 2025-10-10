@@ -11,8 +11,7 @@ namespace NunuTheAICompanion.UI;
 
 /// <summary>
 /// Two-pane chat: left = You, right = Little Nunu.
-/// Streams assistant text without relying on newline tokens.
-/// Filters out the trailing empty assistant from the backend request to avoid backend silence.
+/// Streams assistant text and omits empty assistant from backend history.
 /// </summary>
 public sealed class ChatWindow : Window
 {
@@ -30,7 +29,7 @@ public sealed class ChatWindow : Window
     {
         _config = config;
         _memory = memory;
-        _client = new OllamaClient(new HttpClient());
+        _client = new OllamaClient(new HttpClient(), _config);
 
         SizeConstraints = new WindowSizeConstraints
         {
@@ -62,16 +61,12 @@ public sealed class ChatWindow : Window
         if (ImGui.BeginChild("toolbar", new Vector2(0, 28 * ImGuiHelpers.GlobalScale), false))
         {
             ImGui.TextUnformatted("Nunu The AI Companion — ToS-safe chat only");
-            ImGui.SameLine();
-            ImGui.TextDisabled(" | ");
-            ImGui.SameLine();
-            ImGui.TextUnformatted($"Backend: {_config.BackendUrl}");
+            ImGui.SameLine(); ImGui.TextDisabled(" | "); ImGui.SameLine();
+            ImGui.TextUnformatted($"Backend: {_config.BackendMode}@{_config.BackendUrl}");
 
             if (_memory is not null)
             {
-                ImGui.SameLine();
-                ImGui.TextDisabled(" | ");
-                ImGui.SameLine();
+                ImGui.SameLine(); ImGui.TextDisabled(" | "); ImGui.SameLine();
                 bool enabled = _memory.Enabled;
                 if (ImGui.Checkbox("Memory", ref enabled))
                 {
@@ -108,8 +103,7 @@ public sealed class ChatWindow : Window
 
             foreach (var (role, content) in _messages)
             {
-                if (role != "user") continue;
-                if (string.IsNullOrWhiteSpace(content)) continue;
+                if (role != "user" || string.IsNullOrWhiteSpace(content)) continue;
 
                 ImGui.PushStyleColor(ImGuiCol.ChildBg, new Vector4(0.10f, 0.12f, 0.16f, 0.65f));
                 ImGui.BeginChild($"user_{content.GetHashCode()}", new Vector2(0, 0), true);
@@ -119,8 +113,7 @@ public sealed class ChatWindow : Window
                 ImGui.Spacing();
             }
 
-            if (ImGui.GetScrollY() >= ImGui.GetScrollMaxY() - 5f)
-                ImGui.SetScrollHereY(1.0f);
+            if (ImGui.GetScrollY() >= ImGui.GetScrollMaxY() - 5f) ImGui.SetScrollHereY(1.0f);
         }
         ImGui.EndChild();
 
@@ -134,8 +127,7 @@ public sealed class ChatWindow : Window
 
             foreach (var (role, content) in _messages)
             {
-                if (role != "assistant") continue;
-                if (string.IsNullOrWhiteSpace(content)) continue;
+                if (role != "assistant" || string.IsNullOrWhiteSpace(content)) continue;
 
                 ImGui.PushStyleColor(ImGuiCol.ChildBg, new Vector4(0.20f, 0.00f, 0.20f, 0.50f));
                 ImGui.BeginChild($"assistant_{content.GetHashCode()}", new Vector2(0, 0), true);
@@ -145,11 +137,8 @@ public sealed class ChatWindow : Window
                 ImGui.Spacing();
             }
 
-            if (_isStreaming)
-                ImGui.TextDisabled("Nunu is tuning the voidstrings…");
-
-            if (ImGui.GetScrollY() >= ImGui.GetScrollMaxY() - 5f)
-                ImGui.SetScrollHereY(1.0f);
+            if (_isStreaming) ImGui.TextDisabled("Nunu is tuning the voidstrings…");
+            if (ImGui.GetScrollY() >= ImGui.GetScrollMaxY() - 5f) ImGui.SetScrollHereY(1.0f);
         }
         ImGui.EndChild();
     }
@@ -169,12 +158,8 @@ public sealed class ChatWindow : Window
             ImGui.SameLine();
 
             var canSend = !_isStreaming && !string.IsNullOrWhiteSpace(_input);
-            if (ImGui.Button("Sing", new Vector2(btnW, 80 * ImGuiHelpers.GlobalScale)) && canSend)
-            {
-                Send();
-            }
-            if (ImGui.IsItemHovered())
-                ImGui.SetTooltip("Send to Nunu");
+            if (ImGui.Button("Sing", new Vector2(btnW, 80 * ImGuiHelpers.GlobalScale)) && canSend) Send();
+            if (ImGui.IsItemHovered()) ImGui.SetTooltip("Send to Nunu");
         }
         ImGui.EndChild();
     }
@@ -185,8 +170,7 @@ public sealed class ChatWindow : Window
         if (string.IsNullOrEmpty(text)) return;
 
         _messages.Add(("user", text));
-        if (_rememberNext && _memory?.Enabled == true)
-            _memory.Append("user", text, topic: "chat");
+        if (_rememberNext && _memory?.Enabled == true) _memory.Append("user", text, topic: "chat");
 
         _input = string.Empty;
         StreamAsync();
@@ -199,14 +183,12 @@ public sealed class ChatWindow : Window
         _cts?.Cancel();
         _cts = new CancellationTokenSource();
 
-        // 1) Add a local assistant placeholder for the right pane.
+        // Local placeholder
         _messages.Add(("assistant", string.Empty));
         int idx = _messages.Count - 1;
 
-        // 2) Build history WITHOUT the trailing empty assistant.
-        var history = _messages
-            .Where((m, i) => !(i == idx && m.role == "assistant"))
-            .ToList();
+        // History for backend (drop trailing empty assistant)
+        var history = _messages.Where((m, i) => !(i == idx && m.role == "assistant")).ToList();
 
         try
         {
