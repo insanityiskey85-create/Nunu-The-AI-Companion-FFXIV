@@ -28,6 +28,7 @@ public sealed class PluginMain : IDalamudPlugin
     internal UI.ChatWindow ChatWindow { get; private set; } = null!;
     internal UI.ConfigWindow ConfigWindow { get; private set; } = null!;
     internal UI.MemoryWindow? MemoryWindow { get; private set; }
+    internal UI.ImageWindow ImageWindow { get; private set; } = null!;
     internal MemoryService? Memory { get; private set; }
 
     private readonly List<(string role, string content)> _history = new();
@@ -41,6 +42,7 @@ public sealed class PluginMain : IDalamudPlugin
     private const string Command = "/nunu";
     private const string DiagCommand = "/nunudiag";
     private const string DebugCommand = "/nunudebug";
+    private const string ImgCommand = "/nunuimg";
 
     public PluginMain()
     {
@@ -48,7 +50,7 @@ public sealed class PluginMain : IDalamudPlugin
         Config = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
         Config.Initialize(PluginInterface);
 
-        // Backend
+        // Chat backend
         _client = new OllamaClient(_http, Config);
 
         // Memory
@@ -56,7 +58,7 @@ public sealed class PluginMain : IDalamudPlugin
         Memory = new MemoryService(cfgDir, Config.MemoryMaxEntries, Config.MemoryEnabled);
 
         // Windows
-        ChatWindow = new UI.ChatWindow(Config) { Size = new Vector2(680, 460) };
+        ChatWindow = new UI.ChatWindow(Config) { Size = new Vector2(740, 480) };
         ChatWindow.OnSend += HandleUserSend;
         WindowSystem.AddWindow(ChatWindow);
 
@@ -66,13 +68,19 @@ public sealed class PluginMain : IDalamudPlugin
         MemoryWindow = new UI.MemoryWindow(Config, Memory);
         WindowSystem.AddWindow(MemoryWindow);
 
+        // Image backend + window
+        var imageSaveBase = System.IO.Path.Combine(cfgDir, "Images");
+        var imageClient = new ImageClient(_http, Config, imageSaveBase);
+        ImageWindow = new UI.ImageWindow(Config, imageClient);
+        WindowSystem.AddWindow(ImageWindow);
+
         // Greeting
         const string hello = "WAH! Little Nunu listens by the campfire. Call me with @nunu; I answer here, not in game chat.";
         ChatWindow.AppendAssistant(hello);
         _history.Add(("assistant", hello));
         Memory?.Append("assistant", hello, topic: "greeting");
 
-        // Chat listener with debug mirroring into the window
+        // Chat listener
         _listener = new ChatListener(
             ChatGui,
             Log,
@@ -81,18 +89,10 @@ public sealed class PluginMain : IDalamudPlugin
             mirrorDebugToWindow: s => ChatWindow.AppendAssistant(s));
 
         // Commands
-        CommandManager.AddHandler(Command, new CommandInfo(OnCommand)
-        {
-            HelpMessage = "Toggle Nunu. '/nunu config' settings. '/nunu memory' memories."
-        });
-        CommandManager.AddHandler(DiagCommand, new CommandInfo(OnDiag)
-        {
-            HelpMessage = "Diagnostics for Nunu chat listening."
-        });
-        CommandManager.AddHandler(DebugCommand, new CommandInfo(OnDebugCommand)
-        {
-            HelpMessage = "Toggle debug listening: /nunudebug on|off|mirror [on|off]"
-        });
+        CommandManager.AddHandler(Command, new CommandInfo(OnCommand) { HelpMessage = "Toggle Nunu. '/nunu config' settings. '/nunu memory' memories." });
+        CommandManager.AddHandler(DiagCommand, new CommandInfo(OnDiag) { HelpMessage = "Diagnostics for Nunu chat listening." });
+        CommandManager.AddHandler(DebugCommand, new CommandInfo(OnDebugCommand) { HelpMessage = "Toggle debug listening: /nunudebug on|off|mirror [on|off]" });
+        CommandManager.AddHandler(ImgCommand, new CommandInfo(OnImgCommand) { HelpMessage = "Open Nunu's image atelier." });
 
         // UI hooks
         PluginInterface.UiBuilder.Draw += DrawUI;
@@ -102,9 +102,10 @@ public sealed class PluginMain : IDalamudPlugin
         Log.Information("[Nunu] Plugin initialized.");
     }
 
+    private void OnImgCommand(string command, string args) => ImageWindow.IsOpen = !ImageWindow.IsOpen;
+
     private void OnEligibleChatHeard(string author, string text)
     {
-        // Acknowledge in UI, then feed the content to backend
         ChatWindow.AppendAssistant($"“{text}” you say, {author}? Very well…");
         HandleUserSend(text);
     }
@@ -114,6 +115,7 @@ public sealed class PluginMain : IDalamudPlugin
         var trimmed = args?.Trim() ?? string.Empty;
         if (trimmed.Equals("config", StringComparison.OrdinalIgnoreCase)) { ConfigWindow.IsOpen = true; return; }
         if (trimmed.Equals("memory", StringComparison.OrdinalIgnoreCase)) { MemoryWindow!.IsOpen = true; return; }
+        if (trimmed.Equals("image", StringComparison.OrdinalIgnoreCase)) { ImageWindow.IsOpen = true; return; }
         ChatWindow.IsOpen = !ChatWindow.IsOpen;
     }
 
@@ -132,24 +134,19 @@ public sealed class PluginMain : IDalamudPlugin
         var a = (args ?? "").Trim().ToLowerInvariant();
         if (a is "on" or "1" or "true")
         {
-            Config.DebugListen = true;
-            Config.Save();
-            ChatWindow.AppendAssistant("[diag] DebugListen ON");
-            Log.Information("DebugListen ON");
+            Config.DebugListen = true; Config.Save();
+            ChatWindow.AppendAssistant("[diag] DebugListen ON"); Log.Information("DebugListen ON");
         }
         else if (a is "off" or "0" or "false")
         {
-            Config.DebugListen = false;
-            Config.Save();
-            ChatWindow.AppendAssistant("[diag] DebugListen OFF");
-            Log.Information("DebugListen OFF");
+            Config.DebugListen = false; Config.Save();
+            ChatWindow.AppendAssistant("[diag] DebugListen OFF"); Log.Information("DebugListen OFF");
         }
         else if (a.StartsWith("mirror"))
         {
             var parts = a.Split(' ', StringSplitOptions.RemoveEmptyEntries);
             bool set = parts.Length < 2 || parts[1] is "on" or "1" or "true";
-            Config.DebugMirrorToWindow = set;
-            Config.Save();
+            Config.DebugMirrorToWindow = set; Config.Save();
             ChatWindow.AppendAssistant($"[diag] DebugMirrorToWindow {(set ? "ON" : "OFF")}");
             Log.Information("DebugMirrorToWindow {State}", set ? "ON" : "OFF");
         }
@@ -169,6 +166,7 @@ public sealed class PluginMain : IDalamudPlugin
         CommandManager.RemoveHandler(Command);
         CommandManager.RemoveHandler(DiagCommand);
         CommandManager.RemoveHandler(DebugCommand);
+        CommandManager.RemoveHandler(ImgCommand);
         _http.Dispose();
         Log.Information("[Nunu] Plugin disposed.");
     }

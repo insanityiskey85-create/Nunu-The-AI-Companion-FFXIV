@@ -6,9 +6,9 @@ namespace NunuTheAICompanion;
 
 public sealed class Configuration : IPluginConfiguration
 {
-    public int Version { get; set; } = 8;
+    public int Version { get; set; } = 9;
 
-    // Backend
+    // Backend (chat)
     public string BackendUrl { get; set; } = "http://localhost:11434/api/chat";
     public string BackendMode { get; set; } = "jsonl"; // "jsonl" | "sse" | "plaintext"
     public string ModelName { get; set; } = "nunu-8b";
@@ -29,8 +29,6 @@ public sealed class Configuration : IPluginConfiguration
 
     // Chat display
     public bool AsciiSafe { get; set; } = false;
-
-    // Your display name in the chat window (used instead of "You")
     public string ChatDisplayName { get; set; } = "You"; // e.g., "Real Nunu"
 
     // Listening / Callsign / Whitelist
@@ -52,8 +50,22 @@ public sealed class Configuration : IPluginConfiguration
     public bool DebugListen { get; set; } = false;
     public bool DebugMirrorToWindow { get; set; } = true;
 
-    [System.NonSerialized] private IDalamudPluginInterface? _pluginInterface;
+    // ===== Images (NEW) =====
+    // Currently supported: "auto1111"
+    public string ImageBackendMode { get; set; } = "auto1111";
+    public string ImageBackendUrl { get; set; } = "http://127.0.0.1:7860";
+    public string ImageSaveDir { get; set; } = ""; // blank = plugin config directory /Images
 
+    // Defaults for txt2img
+    public int ImgWidth { get; set; } = 768;
+    public int ImgHeight { get; set; } = 768;
+    public int ImgSteps { get; set; } = 28;
+    public float ImgCfgScale { get; set; } = 7.0f;
+    public string ImgSampler { get; set; } = "Euler a";
+    public string ImgNegative { get; set; } =
+        "lowres, blurry, deformed, extra fingers, mutated, watermark, text, cropped, jpeg artifacts";
+
+    [System.NonSerialized] private IDalamudPluginInterface? _pluginInterface;
     public void Initialize(IDalamudPluginInterface pluginInterface) => _pluginInterface = pluginInterface;
     public void Save() => _pluginInterface!.SavePluginConfig(this);
 }
