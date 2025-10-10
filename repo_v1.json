@@ -13,7 +13,7 @@
     "CategoryTags": [ "utility" ],
     "LoadPriority": 0,
     "ImageUrls": [ null ],
-    "IconUrl": "https://github.com/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV/releases/download/v1.0.1.0/assets/WOW.png",
+    "IconUrl": "https://raw.githubusercontent.com/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV/master/WOW.png",
     "Changelog": "v1.0.1.1: Two-pane chat window (You ⇄ Little Nunu), streaming fixes, UI polish.",
     "IsHide": false,
     "IsTestingExclusive": false,
