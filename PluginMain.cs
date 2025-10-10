@@ -1,4 +1,9 @@
-﻿using System.Numerics;
+﻿using System;
+using System.Collections.Generic;
+using System.Numerics;
+using System.Net.Http;
+using System.Text;
+using System.Threading;
 using Dalamud.Game.Command;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin;
@@ -35,6 +40,7 @@ public sealed class PluginMain : IDalamudPlugin
 
     private const string Command = "/nunu";
     private const string DiagCommand = "/nunudiag";
+    private const string DebugCommand = "/nunudebug";
 
     public PluginMain()
     {
@@ -67,8 +73,12 @@ public sealed class PluginMain : IDalamudPlugin
         Memory?.Append("assistant", hello, topic: "greeting");
 
         // Chat listener with debug mirroring into the window
-        _listener = new ChatListener(ChatGui, Log, Config, OnEligibleChatHeard,
-            mirrorDebugToWindow: s => ChatWindow.AppendAssistant($"[diag] {s}"));
+        _listener = new ChatListener(
+            ChatGui,
+            Log,
+            Config,
+            OnEligibleChatHeard,
+            mirrorDebugToWindow: s => ChatWindow.AppendAssistant(s));
 
         // Commands
         CommandManager.AddHandler(Command, new CommandInfo(OnCommand)
@@ -78,6 +88,10 @@ public sealed class PluginMain : IDalamudPlugin
         CommandManager.AddHandler(DiagCommand, new CommandInfo(OnDiag)
         {
             HelpMessage = "Diagnostics for Nunu chat listening."
+        });
+        CommandManager.AddHandler(DebugCommand, new CommandInfo(OnDebugCommand)
+        {
+            HelpMessage = "Toggle debug listening: /nunudebug on|off|mirror [on|off]"
         });
 
         // UI hooks
@@ -107,10 +121,42 @@ public sealed class PluginMain : IDalamudPlugin
     {
         var s = $"[diag] ListenEnabled={Config.ListenEnabled}, RequireCallsign={Config.RequireCallsign}, Callsign='{Config.Callsign}', " +
                 $"Say={Config.ListenSay}, Tell={Config.ListenTell}, Party={Config.ListenParty}, Alliance={Config.ListenAlliance}, FC={Config.ListenFreeCompany}, " +
-                $"Shout={Config.ListenShout}, Yell={Config.ListenYell}, WhitelistCount={(Config.Whitelist?.Count ?? 0)}, DebugListen={Config.DebugListen}";
+                $"Shout={Config.ListenShout}, Yell={Config.ListenYell}, WhitelistCount={(Config.Whitelist?.Count ?? 0)}, DebugListen={Config.DebugListen}, Mirror={Config.DebugMirrorToWindow}";
         Log.Information(s);
         ChatWindow.AppendAssistant(s);
-        ChatGui.Print($"Nunu diag: listening={(Config.ListenEnabled ? "on" : "off")} callsign='{Config.Callsign}' (require={(Config.RequireCallsign ? "yes" : "no")})");
+        ChatGui.Print("Nunu diag printed in window.");
+    }
+
+    private void OnDebugCommand(string cmd, string args)
+    {
+        var a = (args ?? "").Trim().ToLowerInvariant();
+        if (a is "on" or "1" or "true")
+        {
+            Config.DebugListen = true;
+            Config.Save();
+            ChatWindow.AppendAssistant("[diag] DebugListen ON");
+            Log.Information("DebugListen ON");
+        }
+        else if (a is "off" or "0" or "false")
+        {
+            Config.DebugListen = false;
+            Config.Save();
+            ChatWindow.AppendAssistant("[diag] DebugListen OFF");
+            Log.Information("DebugListen OFF");
+        }
+        else if (a.StartsWith("mirror"))
+        {
+            var parts = a.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            bool set = parts.Length < 2 || parts[1] is "on" or "1" or "true";
+            Config.DebugMirrorToWindow = set;
+            Config.Save();
+            ChatWindow.AppendAssistant($"[diag] DebugMirrorToWindow {(set ? "ON" : "OFF")}");
+            Log.Information("DebugMirrorToWindow {State}", set ? "ON" : "OFF");
+        }
+        else
+        {
+            ChatWindow.AppendAssistant("[diag] Usage: /nunudebug on | off | mirror [on|off]");
+        }
     }
 
     private void DrawUI() => WindowSystem.Draw();
@@ -122,6 +168,7 @@ public sealed class PluginMain : IDalamudPlugin
         WindowSystem.RemoveAllWindows();
         CommandManager.RemoveHandler(Command);
         CommandManager.RemoveHandler(DiagCommand);
+        CommandManager.RemoveHandler(DebugCommand);
         _http.Dispose();
         Log.Information("[Nunu] Plugin disposed.");
     }
@@ -144,7 +191,7 @@ public sealed class PluginMain : IDalamudPlugin
         _isStreaming = true;
         _cts = new CancellationTokenSource();
 
-        var full = new System.Text.StringBuilder();
+        var full = new StringBuilder();
 
         try
         {

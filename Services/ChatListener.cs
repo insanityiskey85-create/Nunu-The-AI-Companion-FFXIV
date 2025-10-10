@@ -8,42 +8,31 @@ namespace NunuTheAICompanion.Services;
 /// <summary>
 /// Listens to FFXIV chat via Dalamud IChatGui and forwards eligible messages
 /// (callsign + whitelist + channel filter) to the provided callback.
-/// Compatible with ChatMessage delegates that pass SeString by ref or by value.
+/// Compatible with SDKs that pass SeString by ref or by value.
 /// </summary>
 public sealed class ChatListener : IDisposable
 {
     private readonly IChatGui _chatGui;
-    private readonly IPluginLog? _log; // optional
+    private readonly IPluginLog _log;
     private readonly Configuration _config;
     private readonly Action<string /*sender*/, string /*text*/> _onEligibleMessage;
+    private readonly Action<string /*debug line*/>? _mirrorDebug;
 
     public ChatListener(
         IChatGui chatGui,
+        IPluginLog log,
         Configuration config,
         Action<string, string> onEligibleMessage,
-        IPluginLog? log = null)
+        Action<string>? mirrorDebugToWindow = null)
     {
         _chatGui = chatGui ?? throw new ArgumentNullException(nameof(chatGui));
+        _log = log ?? throw new ArgumentNullException(nameof(log));
         _config = config ?? throw new ArgumentNullException(nameof(config));
         _onEligibleMessage = onEligibleMessage ?? throw new ArgumentNullException(nameof(onEligibleMessage));
-        _log = log;
+        _mirrorDebug = mirrorDebugToWindow;
 
-        // Subscribe — compiler will bind to the matching overload below
-        _chatGui.ChatMessage += OnChatMessage;
-        _log?.Information("[ChatListener] Subscribed to ChatMessage.");
-    }
-
-    public ChatListener(IChatGui chatGui, IPluginLog log, Configuration config, Action<string, string> onEligibleChatHeard, Action<object> mirrorDebugToWindow)
-    {
-        _chatGui = chatGui;
-        _log = log;
-        _config = config;
-    }
-
-    public void Dispose()
-    {
-        _chatGui.ChatMessage -= OnChatMessage;
-        _log?.Information("[ChatListener] Unsubscribed from ChatMessage.");
+        _chatGui.ChatMessage += OnChatMessage; // compiler binds to a matching overload below
+        _log.Information("[ChatListener] Subscribed to ChatMessage.");
     }
 
     private void OnChatMessage(XivChatType type, int timestamp, ref SeString sender, ref SeString message, ref bool isHandled)
@@ -51,7 +40,13 @@ public sealed class ChatListener : IDisposable
         throw new NotImplementedException();
     }
 
-    // ---- Overload A: SeString by ref (most common) ----
+    public void Dispose()
+    {
+        _chatGui.ChatMessage -= OnChatMessage;
+        _log.Information("[ChatListener] Unsubscribed from ChatMessage.");
+    }
+
+    // ---- Overload A: SeString by ref (common) ----
     private void OnChatMessage(
         XivChatType type,
         uint senderId,
@@ -73,7 +68,6 @@ public sealed class ChatListener : IDisposable
         HandleMessage(type, senderId, sender.TextValue, message.TextValue, ref isHandled);
     }
 
-    // ---- Unified logic ----
     private void HandleMessage(
         XivChatType type,
         uint senderId,
@@ -86,7 +80,13 @@ public sealed class ChatListener : IDisposable
             var author = (senderText ?? string.Empty).Trim();
             var text = (messageText ?? string.Empty).Trim();
 
-            _log?.Verbose($"[heard] type={type} senderId={senderId} author='{author}' text='{text}'");
+            if (_config.DebugListen)
+            {
+                var dbg = $"[heard] type={type} senderId={senderId} author='{author}' text='{text}'";
+                _log.Information(dbg);
+                if (_config.DebugMirrorToWindow && _mirrorDebug is not null)
+                    _mirrorDebug(dbg);
+            }
 
             if (!_config.ListenEnabled) return;
             if (!IsChannelAllowed(type)) return;
@@ -114,7 +114,7 @@ public sealed class ChatListener : IDisposable
         }
         catch (Exception ex)
         {
-            _log?.Error(ex, "ChatListener exception in HandleMessage.");
+            _log.Error(ex, "ChatListener exception in HandleMessage.");
         }
     }
 

@@ -1,6 +1,9 @@
 ﻿using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Utility;
 using Dalamud.Interface.Windowing;
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Net.Http;
 using System.Numerics;
 using System.Text;
@@ -32,6 +35,10 @@ public sealed class ConfigWindow : Window
 
     // Channels
     private bool _say, _tell, _party, _alliance, _fc, _shout, _yell;
+
+    // Diagnostics
+    private bool _debugListen;
+    private bool _debugMirror;
 
     private static readonly HttpClient _http = new();
     private string _testStatus = "";
@@ -65,6 +72,10 @@ public sealed class ConfigWindow : Window
         _shout = _config.ListenShout;
         _yell = _config.ListenYell;
 
+        // diagnostics
+        _debugListen = _config.DebugListen;
+        _debugMirror = _config.DebugMirrorToWindow;
+
         RespectCloseHotkey = true;
         Flags |= ImGuiWindowFlags.AlwaysAutoResize;
         IsOpen = false;
@@ -75,10 +86,10 @@ public sealed class ConfigWindow : Window
         ImGui.TextUnformatted("Nunu The AI Companion — Settings");
         ImGui.Separator();
 
-        // -------- Backend --------
+        // ---------- Backend ----------
         ImGui.TextUnformatted("Backend Mode");
         var modes = new[] { "jsonl", "sse", "plaintext" };
-        int idx = System.Array.IndexOf(modes, _backendMode);
+        int idx = Array.IndexOf(modes, _backendMode);
         if (idx < 0) idx = 0;
         if (ImGui.BeginCombo("##mode", modes[idx]))
         {
@@ -114,6 +125,7 @@ public sealed class ConfigWindow : Window
 
         ImGui.Separator();
 
+        // Backend test
         if (ImGui.Button(_testing ? "Testing..." : "Test Backend", new Vector2(130 * ImGuiHelpers.GlobalScale, 28 * ImGuiHelpers.GlobalScale)) && !_testing)
         {
             _ = RunTestAsync();
@@ -130,14 +142,14 @@ public sealed class ConfigWindow : Window
 
         ImGui.Separator();
 
-        // -------- Chat Listening --------
+        // ---------- Chat Listening ----------
         ImGui.TextUnformatted("Chat Listening");
         ImGui.Checkbox("Enable listening", ref _listenEnabled);
 
         ImGui.Checkbox("Require callsign", ref _requireCallsign);
         ImGui.SameLine();
         ImGui.InputText("Callsign", ref _callsign, 64);
-        ImGui.TextDisabled("Example: @nunu (match is case-insensitive)");
+        ImGui.TextDisabled("Example: @nunu (case-insensitive)");
 
         ImGui.TextUnformatted("Whitelist (comma-separated names, optional)");
         ImGui.InputTextMultiline("##wl", ref _whitelistCsv, 8000, new Vector2(520, 60));
@@ -151,6 +163,13 @@ public sealed class ConfigWindow : Window
         ImGui.Checkbox("FC", ref _fc);
         ImGui.Checkbox("Shout", ref _shout); ImGui.SameLine();
         ImGui.Checkbox("Yell", ref _yell);
+
+        ImGui.Separator();
+
+        // ---------- Diagnostics ----------
+        ImGui.Checkbox("Debug: log all heard chat events", ref _debugListen);
+        ImGui.SameLine();
+        ImGui.Checkbox("Mirror debug lines into Nunu window", ref _debugMirror);
 
         ImGui.Separator();
 
@@ -171,7 +190,6 @@ public sealed class ConfigWindow : Window
             _config.RequireCallsign = _requireCallsign;
             _config.Callsign = string.IsNullOrWhiteSpace(_callsign) ? "@nunu" : _callsign.Trim();
 
-            // parse whitelist
             var list = new List<string>();
             foreach (var raw in (_whitelistCsv ?? string.Empty).Split(',', StringSplitOptions.RemoveEmptyEntries))
             {
@@ -187,6 +205,9 @@ public sealed class ConfigWindow : Window
             _config.ListenFreeCompany = _fc;
             _config.ListenShout = _shout;
             _config.ListenYell = _yell;
+
+            _config.DebugListen = _debugListen;
+            _config.DebugMirrorToWindow = _debugMirror;
 
             _config.WindowOpacity = _opacity;
 
@@ -244,7 +265,7 @@ public sealed class ConfigWindow : Window
             using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
             _testStatus = resp.IsSuccessStatusCode ? "OK: backend reachable." : $"ERR: HTTP {(int)resp.StatusCode} {resp.ReasonPhrase}";
         }
-        catch (System.Exception ex)
+        catch (Exception ex)
         {
             _testStatus = $"ERR: {ex.Message}";
         }
