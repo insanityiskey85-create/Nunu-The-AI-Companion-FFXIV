@@ -15,6 +15,7 @@ public sealed class PluginMain : IDalamudPlugin
     [PluginService] internal static IDalamudPluginInterface PluginInterface { get; private set; } = null!;
     [PluginService] internal static ICommandManager CommandManager { get; private set; } = null!;
     [PluginService] internal static IChatGui ChatGui { get; private set; } = null!;
+    [PluginService] internal static IPluginLog Log { get; private set; } = null!;
 
     internal Configuration Config { get; private set; } = null!;
     internal WindowSystem WindowSystem { get; } = new("NunuTheAICompanion");
@@ -33,6 +34,7 @@ public sealed class PluginMain : IDalamudPlugin
     private ChatListener? _listener;
 
     private const string Command = "/nunu";
+    private const string DiagCommand = "/nunudiag";
 
     public PluginMain()
     {
@@ -59,24 +61,31 @@ public sealed class PluginMain : IDalamudPlugin
         WindowSystem.AddWindow(MemoryWindow);
 
         // Greeting
-        const string hello = "WAH! Little Nunu listens by the campfire. Call my name with @nunu and I shall answer.";
+        const string hello = "WAH! Little Nunu listens by the campfire. Call me with @nunu; I answer here, not in game chat.";
         ChatWindow.AppendAssistant(hello);
         _history.Add(("assistant", hello));
         Memory?.Append("assistant", hello, topic: "greeting");
 
-        // Chat listener
-        _listener = new ChatListener(ChatGui, Config, OnEligibleChatHeard);
+        // Chat listener with debug mirroring into the window
+        _listener = new ChatListener(ChatGui, Log, Config, OnEligibleChatHeard,
+            mirrorDebugToWindow: s => ChatWindow.AppendAssistant($"[diag] {s}"));
 
         // Commands
         CommandManager.AddHandler(Command, new CommandInfo(OnCommand)
         {
             HelpMessage = "Toggle Nunu. '/nunu config' settings. '/nunu memory' memories."
         });
+        CommandManager.AddHandler(DiagCommand, new CommandInfo(OnDiag)
+        {
+            HelpMessage = "Diagnostics for Nunu chat listening."
+        });
 
         // UI hooks
         PluginInterface.UiBuilder.Draw += DrawUI;
         PluginInterface.UiBuilder.OpenConfigUi += () => ConfigWindow.IsOpen = true;
         PluginInterface.UiBuilder.OpenMainUi += () => ChatWindow.IsOpen = true;
+
+        Log.Information("[Nunu] Plugin initialized.");
     }
 
     private void OnEligibleChatHeard(string author, string text)
@@ -94,6 +103,16 @@ public sealed class PluginMain : IDalamudPlugin
         ChatWindow.IsOpen = !ChatWindow.IsOpen;
     }
 
+    private void OnDiag(string command, string args)
+    {
+        var s = $"[diag] ListenEnabled={Config.ListenEnabled}, RequireCallsign={Config.RequireCallsign}, Callsign='{Config.Callsign}', " +
+                $"Say={Config.ListenSay}, Tell={Config.ListenTell}, Party={Config.ListenParty}, Alliance={Config.ListenAlliance}, FC={Config.ListenFreeCompany}, " +
+                $"Shout={Config.ListenShout}, Yell={Config.ListenYell}, WhitelistCount={(Config.Whitelist?.Count ?? 0)}, DebugListen={Config.DebugListen}";
+        Log.Information(s);
+        ChatWindow.AppendAssistant(s);
+        ChatGui.Print($"Nunu diag: listening={(Config.ListenEnabled ? "on" : "off")} callsign='{Config.Callsign}' (require={(Config.RequireCallsign ? "yes" : "no")})");
+    }
+
     private void DrawUI() => WindowSystem.Draw();
 
     public void Dispose()
@@ -102,7 +121,9 @@ public sealed class PluginMain : IDalamudPlugin
         _listener?.Dispose();
         WindowSystem.RemoveAllWindows();
         CommandManager.RemoveHandler(Command);
+        CommandManager.RemoveHandler(DiagCommand);
         _http.Dispose();
+        Log.Information("[Nunu] Plugin disposed.");
     }
 
     // ---------- Chat pipeline ----------
@@ -137,6 +158,7 @@ public sealed class PluginMain : IDalamudPlugin
         catch (Exception ex)
         {
             ChatWindow.AppendAssistantDelta($" [error: {ex.Message}]");
+            Log.Error(ex, "Streaming failed.");
         }
         finally
         {

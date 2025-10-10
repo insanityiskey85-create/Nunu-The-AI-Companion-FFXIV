@@ -8,22 +8,42 @@ namespace NunuTheAICompanion.Services;
 /// <summary>
 /// Listens to FFXIV chat via Dalamud IChatGui and forwards eligible messages
 /// (callsign + whitelist + channel filter) to the provided callback.
-/// Replies are NOT sent to game chat; PluginMain routes to UI.
+/// Compatible with ChatMessage delegates that pass SeString by ref or by value.
 /// </summary>
 public sealed class ChatListener : IDisposable
 {
     private readonly IChatGui _chatGui;
+    private readonly IPluginLog? _log; // optional
     private readonly Configuration _config;
     private readonly Action<string /*sender*/, string /*text*/> _onEligibleMessage;
 
-    public ChatListener(IChatGui chatGui, Configuration config, Action<string, string> onEligibleMessage)
+    public ChatListener(
+        IChatGui chatGui,
+        Configuration config,
+        Action<string, string> onEligibleMessage,
+        IPluginLog? log = null)
     {
         _chatGui = chatGui ?? throw new ArgumentNullException(nameof(chatGui));
         _config = config ?? throw new ArgumentNullException(nameof(config));
         _onEligibleMessage = onEligibleMessage ?? throw new ArgumentNullException(nameof(onEligibleMessage));
+        _log = log;
 
-        // API 13: subscribe to ChatMessage (public on IChatGui)
+        // Subscribe — compiler will bind to the matching overload below
         _chatGui.ChatMessage += OnChatMessage;
+        _log?.Information("[ChatListener] Subscribed to ChatMessage.");
+    }
+
+    public ChatListener(IChatGui chatGui, IPluginLog log, Configuration config, Action<string, string> onEligibleChatHeard, Action<object> mirrorDebugToWindow)
+    {
+        _chatGui = chatGui;
+        _log = log;
+        _config = config;
+    }
+
+    public void Dispose()
+    {
+        _chatGui.ChatMessage -= OnChatMessage;
+        _log?.Information("[ChatListener] Unsubscribed from ChatMessage.");
     }
 
     private void OnChatMessage(XivChatType type, int timestamp, ref SeString sender, ref SeString message, ref bool isHandled)
@@ -31,12 +51,7 @@ public sealed class ChatListener : IDisposable
         throw new NotImplementedException();
     }
 
-    public void Dispose()
-    {
-        _chatGui.ChatMessage -= OnChatMessage;
-    }
-
-    // Matches IChatGui.ChatMessage delegate
+    // ---- Overload A: SeString by ref (most common) ----
     private void OnChatMessage(
         XivChatType type,
         uint senderId,
@@ -44,38 +59,52 @@ public sealed class ChatListener : IDisposable
         ref SeString message,
         ref bool isHandled)
     {
+        HandleMessage(type, senderId, sender.TextValue, message.TextValue, ref isHandled);
+    }
+
+    // ---- Overload B: SeString by value (some SDKs) ----
+    private void OnChatMessage(
+        XivChatType type,
+        uint senderId,
+        SeString sender,
+        SeString message,
+        ref bool isHandled)
+    {
+        HandleMessage(type, senderId, sender.TextValue, message.TextValue, ref isHandled);
+    }
+
+    // ---- Unified logic ----
+    private void HandleMessage(
+        XivChatType type,
+        uint senderId,
+        string? senderText,
+        string? messageText,
+        ref bool isHandled)
+    {
         try
         {
-            if (!_config.ListenEnabled)
-                return;
+            var author = (senderText ?? string.Empty).Trim();
+            var text = (messageText ?? string.Empty).Trim();
 
-            if (!IsChannelAllowed(type))
-                return;
+            _log?.Verbose($"[heard] type={type} senderId={senderId} author='{author}' text='{text}'");
 
-            var author = (sender.TextValue ?? string.Empty).Trim();
-            if (author.Length == 0 || author.Equals("You", StringComparison.OrdinalIgnoreCase))
-                return;
+            if (!_config.ListenEnabled) return;
+            if (!IsChannelAllowed(type)) return;
 
-            if (!IsAuthorAllowed(author))
-                return;
-
-            var text = (message.TextValue ?? string.Empty).Trim();
-            if (text.Length == 0)
-                return;
+            if (author.Length == 0 || author.Equals("You", StringComparison.OrdinalIgnoreCase)) return;
+            if (!IsAuthorAllowed(author)) return;
+            if (text.Length == 0) return;
 
             if (_config.RequireCallsign)
             {
                 var cs = (_config.Callsign ?? string.Empty).Trim();
-                if (cs.Length == 0)
-                    return;
+                if (cs.Length == 0) return;
 
                 var idx = text.IndexOf(cs, StringComparison.OrdinalIgnoreCase);
-                if (idx < 0)
-                    return;
+                if (idx < 0) return;
 
                 var cleaned = text.Remove(idx, cs.Length).Trim();
-                if (cleaned.Length == 0)
-                    return;
+                if (cleaned.Length == 0) return;
 
                 _onEligibleMessage(author, cleaned);
                 return;
@@ -83,9 +112,9 @@ public sealed class ChatListener : IDisposable
 
             _onEligibleMessage(author, text);
         }
-        catch
+        catch (Exception ex)
         {
-            // never break chat loop
+            _log?.Error(ex, "ChatListener exception in HandleMessage.");
         }
     }
 
@@ -106,8 +135,7 @@ public sealed class ChatListener : IDisposable
     private bool IsAuthorAllowed(string author)
     {
         var wl = _config.Whitelist;
-        if (wl is null || wl.Count == 0)
-            return true;
+        if (wl is null || wl.Count == 0) return true;
 
         static string BaseName(string a)
         {

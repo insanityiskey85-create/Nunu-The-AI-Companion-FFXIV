@@ -5,11 +5,11 @@ namespace NunuTheAICompanion;
 
 public sealed class Configuration : IPluginConfiguration
 {
-    public int Version { get; set; } = 5;
+    public int Version { get; set; } = 6;
 
     // Backend
-    public string BackendUrl { get; set; } = "http://localhost:11434/api/chat"; // direct: Ollama
-    public string BackendMode { get; set; } = "jsonl"; // "jsonl" | "sse" | "plaintext"
+    public string BackendUrl { get; set; } = "http://localhost:11434/api/chat";
+    public string BackendMode { get; set; } = "jsonl";
     public string ModelName { get; set; } = "nunu-8b";
     public float Temperature { get; set; } = 0.7f;
     public string? SystemPrompt { get; set; } =
@@ -33,22 +33,23 @@ public sealed class Configuration : IPluginConfiguration
     public bool ListenEnabled { get; set; } = true;
     public bool RequireCallsign { get; set; } = true;
     public string Callsign { get; set; } = "@nunu";
-    public List<string> Whitelist { get; set; } = new(); // names like "Edea Uematsu" or "Edea Uematsu@Zalera"
+    public List<string> Whitelist { get; set; } = new();
 
     // Channels
     public bool ListenSay { get; set; } = true;
-    public bool ListenShout { get; set; } = false;
-    public bool ListenYell { get; set; } = false;
     public bool ListenTell { get; set; } = true;
     public bool ListenParty { get; set; } = true;
     public bool ListenAlliance { get; set; } = false;
-    public bool ListenFreeCompany { get; set; } =true;
-    public bool ListenLinkshells { get; set; } = false;
-    public bool ListenCrossLinkshells { get; set; } = false;
+    public bool ListenFreeCompany { get; set; } = false;
+    public bool ListenShout { get; set; } = false;
+    public bool ListenYell { get; set; } = false;
+
+    // Diagnostics
+    public bool DebugListen { get; set; } = false;
+    public bool DebugMirrorToWindow { get; set; } = true;
 
     [System.NonSerialized] private IDalamudPluginInterface? _pluginInterface;
 
     public void Initialize(IDalamudPluginInterface pluginInterface) => _pluginInterface = pluginInterface;
-
     public void Save() => _pluginInterface!.SavePluginConfig(this);
 }
