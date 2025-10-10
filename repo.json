@@ -7,28 +7,20 @@
       "Description": "In-character, ToS-safe RP chat window. Streams from your local LLM proxy (Ollama-ready).",
       "RepoUrl": "https://github.com/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV",
       "InternalName": "NunuTheAICompanion",
-      "AssemblyVersion": "1.0.0.0",
+      "AssemblyVersion": "1.0.0.1",
       "DalamudApiLevel": 13,
       "ApplicableVersion": "any",
       "Tags": [ "chat", "rp", "ai", "overlay", "nunu" ],
       "CategoryTags": [ "utility" ],
       "LoadPriority": 0,
-
-      "ImageUrls": [null],
-      "IconUrl": "https://raw.githubusercontent.com/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV/master/WOW.png",
-
-      "Changelog": "Initial public release with memory window, config UI, and streaming chat.",
+      "ImageUrls": [],
+      "IconUrl": "",
+      "Changelog": "v1.0.0.1: repo fixes, memory window tweaks.",
       "IsHide": false,
       "IsTestingExclusive": false,
 
-      "DownloadLinkInstall": "https://github.com/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV/releases/download/v1.0.0.0/NunuTheAICompanion-v1.0.0.0.zip",
-      "DownloadLinkUpdate": "https://github.com/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV/releases/download/v1.0.0.0/NunuTheAICompanion-v1.0.0.0.zip",
-      "DownloadCount": 0,
-      "DownloadSHA256": "sha256:3baf076a52bd576216179c5ab1f79665e2b5d419fcdd9613f50be973faf9984f",
-
-      "AcceptsFeedback": true,
-      "FeedbackMessage": "Open issues on the GitHub repository.",
-      "LastUpdate": "2025-10-10T00:00:00Z"
+      "DownloadLinkInstall": "https://github.com/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV/releases/download/v1.0.0.1/NunuTheAICompanion-1.0.0.1.zip",
+      "DownloadLinkUpdate": "https://github.com/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV/releases/download/v1.0.0.1/NunuTheAICompanion-1.0.0.1.zip"
     }
   ]
 }
