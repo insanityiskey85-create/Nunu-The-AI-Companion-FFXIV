@@ -1,33 +1,47 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.Numerics;
 using System.Text;
 using Dalamud.Interface.Windowing;
 
-// ImGui bindings
+// ImGui bindings (Dalamud.Bindings.ImGui.dll)
 using ImGui = Dalamud.Bindings.ImGui.ImGui;
 using ImGuiCol = Dalamud.Bindings.ImGui.ImGuiCol;
 using ImGuiStyleVar = Dalamud.Bindings.ImGui.ImGuiStyleVar;
+using ImGuiWindowFlags = Dalamud.Bindings.ImGui.ImGuiWindowFlags;
+using ImGuiCond = Dalamud.Bindings.ImGui.ImGuiCond;
 
 namespace NunuTheAICompanion.UI;
 
 /// <summary>
-/// Continuous chat log with streaming helpers. 
-/// Shows user's configurable display name and provides Copy buttons for assistant messages.
+/// Two-pane chat:
+///  - Left pane: "Real Nunu" (user) continuous transcript (no bubbles).
+///  - Right pane: "Little Nunu" reply transcript (streams inline).
+/// Keeps copy buttons for assistant (copy last reply / copy all).
 /// </summary>
 public sealed class ChatWindow : Window
 {
     private readonly Configuration _config;
 
-    private readonly List<(string role, string text)> _lines = new();
-    private readonly StringBuilder _streamSb = new();
+    // Continuous transcripts
+    private readonly StringBuilder _userTranscript = new();
+    private readonly StringBuilder _assistantTranscript = new();
 
+    // Streaming buffer for current assistant reply
+    private readonly StringBuilder _assistantStream = new();
+
+    // Last sealed assistant reply (for "Copy last reply")
+    private string _lastAssistantReply = string.Empty;
+
+    // Composer
     private string _userInput = string.Empty;
-    private bool _autoScroll = true;
+
+    // Auto-scroll flags
+    private bool _autoScrollUser = true;
+    private bool _autoScrollAssistant = true;
 
     // First-draw size application
     public new Vector2 Size { get => _initialSize; set => _initialSize = value; }
-    private Vector2 _initialSize = new(640, 420);
+    private Vector2 _initialSize = new(740, 480);
     private bool _didFirstSizeApply;
 
     /// <summary>Raised when player clicks Send with non-empty input.</summary>
@@ -40,19 +54,22 @@ public sealed class ChatWindow : Window
 
         SizeConstraints = new WindowSizeConstraints
         {
-            MinimumSize = new Vector2(420, 240),
+            MinimumSize = new Vector2(520, 320),
             MaximumSize = new Vector2(4096, 4096),
         };
 
         RespectCloseHotkey = true;
         IsOpen = _config.StartOpen;
+
+        // Soft greeting into assistant pane
+        AppendAssistantLine("WAH! Little Nunu listens by the campfire. What tale shall we stitch?");
     }
 
     public override void PreDraw()
     {
         if (!_didFirstSizeApply)
         {
-            ImGui.SetNextWindowSize(_initialSize, Dalamud.Bindings.ImGui.ImGuiCond.FirstUseEver);
+            ImGui.SetNextWindowSize(_initialSize, ImGuiCond.FirstUseEver);
             _didFirstSizeApply = true;
         }
     }
@@ -61,150 +78,251 @@ public sealed class ChatWindow : Window
     {
         ImGui.PushStyleVar(ImGuiStyleVar.Alpha, _config.WindowOpacity);
 
-        // Transcript (fills most of the window height; input row is ~60px)
-        ImGui.BeginChild("nunu_log", new Vector2(0, -60), true, Dalamud.Bindings.ImGui.ImGuiWindowFlags.HorizontalScrollbar);
+        // Top toolbar (optional mini status)
+        DrawToolbar();
 
-        for (int i = 0; i < _lines.Count; i++)
-        {
-            var (role, text) = _lines[i];
-            DrawMessageBubble(i, role, text);
-        }
+        ImGui.Separator();
 
-        // Streaming line (if a reply is in progress)
-        if (_streamSb.Length > 0)
-        {
-            DrawMessageBubble(-1, "assistant_stream", _streamSb.ToString(), isStreaming: true);
-        }
+        // Transcripts area: two panes side-by-side
+        DrawTwoPaneTranscripts();
 
-        // Keep scrolled to bottom if user was there
-        if (_autoScroll && ImGui.GetScrollY() >= ImGui.GetScrollMaxY() - 4)
-            ImGui.SetScrollHereY(1.0f);
-
-        ImGui.EndChild();
+        ImGui.Separator();
 
         // Composer row
-        ImGui.PushItemWidth(-120);
-        ImGui.InputText("##nunu_input", ref _userInput, 4000);
-        ImGui.PopItemWidth();
-        ImGui.SameLine();
-
-        bool send = ImGui.Button("Send");
-        ImGui.SameLine();
-        ImGui.Checkbox("Auto-scroll", ref _autoScroll);
-
-        if (send && !string.IsNullOrWhiteSpace(_userInput))
-        {
-            var text = _userInput.Trim();
-            AppendUser(text);
-            _userInput = string.Empty;
-            OnSend?.Invoke(text);
-        }
+        DrawComposer();
 
         ImGui.PopStyleVar();
     }
 
-    private void DrawMessageBubble(int id, string role, string text, bool isStreaming = false)
+    // =========================
+    //        Toolbar
+    // =========================
+    private void DrawToolbar()
     {
-        bool isUser = role.Equals("you", StringComparison.OrdinalIgnoreCase);
-        bool isAssistant = role.StartsWith("assistant", StringComparison.OrdinalIgnoreCase);
-        bool isSystem = role.Equals("system", StringComparison.OrdinalIgnoreCase);
+        if (!ImGui.BeginChild("toolbar", new Vector2(0, 26), false))
+        { ImGui.EndChild(); return; }
 
-        // Background color by role
-        var bg = isUser ? new Vector4(0.10f, 0.12f, 0.16f, 0.65f)
-                        : isAssistant ? new Vector4(0.20f, 0.00f, 0.20f, 0.50f)
-                                      : new Vector4(0.12f, 0.12f, 0.12f, 0.50f);
+        var me = string.IsNullOrWhiteSpace(_config.ChatDisplayName) ? "You" : _config.ChatDisplayName;
+        ImGui.TextUnformatted($"Real Nunu: {me}");
+        ImGui.SameLine(); ImGui.TextDisabled(" | "); ImGui.SameLine();
+        ImGui.TextUnformatted($"Little Nunu: connected to {(_config.BackendMode ?? "jsonl")} @ {_config.BackendUrl}");
 
-        ImGui.PushStyleColor(ImGuiCol.ChildBg, bg);
-        ImGui.BeginChild($"msg_{role}_{id}", new Vector2(0, 0), true);
+        ImGui.EndChild();
+    }
 
-        // Header (name)
-        ImGui.PushStyleColor(ImGuiCol.Text,
-            isUser ? new Vector4(0.8f, 0.85f, 1.0f, 0.9f)
-                   : isAssistant ? new Vector4(1.0f, 0.8f, 1.0f, 0.9f)
-                                 : new Vector4(0.9f, 0.9f, 0.9f, 0.9f));
+    // =========================
+    //      Two Pane View
+    // =========================
+    private void DrawTwoPaneTranscripts()
+    {
+        // Height reserved for transcripts: take all but composer (~70 px)
+        float availY = ImGui.GetContentRegionAvail().Y - 78f;
+        if (availY < 160) availY = 160;
 
-        var displayName = isUser
-            ? (string.IsNullOrWhiteSpace(_config.ChatDisplayName) ? "You" : _config.ChatDisplayName)
-            : isAssistant ? "Little Nunu"
-                          : "System";
+        var fullWidth = ImGui.GetContentRegionAvail().X;
+        var gap = 8f;
+        var half = (fullWidth - gap) * 0.5f;
+        if (half < 120f) half = Math.Max(120f, fullWidth - gap - 120f);
 
-        ImGui.TextUnformatted(displayName);
+        // Left: Real Nunu (user)
+        ImGui.PushStyleColor(ImGuiCol.ChildBg, new Vector4(0.08f, 0.10f, 0.14f, 0.65f));
+        ImGui.BeginChild("pane_user", new Vector2(half, availY), true, ImGuiWindowFlags.HorizontalScrollbar);
+        {
+            ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(0.85f, 0.90f, 1.0f, 1f));
+            var me = string.IsNullOrWhiteSpace(_config.ChatDisplayName) ? "You" : _config.ChatDisplayName;
+            ImGui.TextUnformatted($"{me} ▸");
+            ImGui.PopStyleColor();
+
+            ImGui.Separator();
+
+            // content
+            var utext = _userTranscript.ToString();
+            if (string.IsNullOrEmpty(utext))
+                ImGui.TextDisabled("(your words will flow here)");
+            else
+            {
+                ImGui.PushTextWrapPos();
+                ImGui.TextWrapped(Sanitize(utext));
+                ImGui.PopTextWrapPos();
+            }
+
+            // Auto-scroll
+            if (_autoScrollUser && ImGui.GetScrollY() >= ImGui.GetScrollMaxY() - 4f)
+                ImGui.SetScrollHereY(1.0f);
+        }
+        ImGui.EndChild();
         ImGui.PopStyleColor();
 
-        // Content
-        if (string.IsNullOrEmpty(text))
-        {
-            if (isAssistant) ImGui.TextDisabled("…tuning the voidstrings");
-        }
-        else
-        {
-            ImGui.PushTextWrapPos();
-            ImGui.TextWrapped(Sanitize(text) + (isStreaming ? "_" : string.Empty));
-            ImGui.PopTextWrapPos();
-        }
+        // Gap
+        ImGui.SameLine();
+        ImGui.Dummy(new Vector2(gap, 1));
+        ImGui.SameLine();
 
-        // Copy controls (assistant messages only; include streaming)
-        if (isAssistant)
+        // Right: Little Nunu (assistant)
+        ImGui.PushStyleColor(ImGuiCol.ChildBg, new Vector4(0.20f, 0.00f, 0.20f, 0.50f));
+        ImGui.BeginChild("pane_assistant", new Vector2(0, availY), true, ImGuiWindowFlags.HorizontalScrollbar);
         {
-            ImGui.Spacing();
-            ImGui.PushID(id);
-            if (ImGui.Button(isStreaming ? "Copy (streaming)" : "Copy"))
+            ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(1.0f, 0.85f, 1.0f, 1f));
+            ImGui.TextUnformatted("Little Nunu ▸");
+            ImGui.PopStyleColor();
+
+            ImGui.SameLine();
+            // Copy controls for assistant pane
+            if (ImGui.SmallButton("Copy last"))
             {
-                var toCopy = text ?? string.Empty;
-                ImGui.SetClipboardText(toCopy);
+                var copy = string.IsNullOrEmpty(_assistantStream.ToString())
+                    ? _lastAssistantReply
+                    : _assistantStream.ToString();
+                ImGui.SetClipboardText(copy ?? string.Empty);
             }
-            // Context menu too
-            if (ImGui.BeginPopupContextItem("assistant_context"))
+            ImGui.SameLine();
+            if (ImGui.SmallButton("Copy all")) ImGui.SetClipboardText((_assistantTranscript.ToString() + _assistantStream.ToString()) ?? string.Empty);
+            ImGui.SameLine();
+            ImGui.Checkbox("Auto-scroll", ref _autoScrollAssistant);
+
+            ImGui.Separator();
+
+            // content (sealed transcript)
+            var atext = _assistantTranscript.ToString();
+            if (!string.IsNullOrEmpty(atext))
             {
-                if (ImGui.MenuItem("Copy"))
-                    ImGui.SetClipboardText(text ?? string.Empty);
-                ImGui.EndPopup();
+                ImGui.PushTextWrapPos();
+                ImGui.TextWrapped(Sanitize(atext));
+                ImGui.PopTextWrapPos();
             }
-            ImGui.PopID();
+
+            // streaming line (cursor)
+            if (_assistantStream.Length > 0)
+            {
+                ImGui.PushTextWrapPos();
+                ImGui.TextWrapped(Sanitize(_assistantStream.ToString()) + "_");
+                ImGui.PopTextWrapPos();
+            }
+            else if (string.IsNullOrEmpty(atext))
+            {
+                ImGui.TextDisabled("(my song appears here)");
+            }
+
+            // Auto-scroll
+            if (_autoScrollAssistant && ImGui.GetScrollY() >= ImGui.GetScrollMaxY() - 4f)
+                ImGui.SetScrollHereY(1.0f);
+        }
+        ImGui.EndChild();
+        ImGui.PopStyleColor();
+    }
+
+    // =========================
+    //        Composer
+    // =========================
+    private void DrawComposer()
+    {
+        if (!ImGui.BeginChild("composer", new Vector2(0, 0), false))
+        { ImGui.EndChild(); return; }
+
+        // Auto-scroll toggles for each pane
+        ImGui.Checkbox("Auto-scroll (you)", ref _autoScrollUser);
+        ImGui.SameLine();
+        // Right pane checkbox lives above; repeat here for convenience:
+        ImGui.Checkbox("Auto-scroll (Nunu)", ref _autoScrollAssistant);
+
+        // Input + Send
+        float btnW = 120f;
+        float inputW = ImGui.GetContentRegionAvail().X - (btnW + 8f);
+        if (inputW < 120f) inputW = 120f;
+
+        ImGui.PushItemWidth(inputW);
+        ImGui.InputText("##nunu_input", ref _userInput, 4000);
+        ImGui.PopItemWidth();
+        ImGui.SameLine();
+
+        if (ImGui.Button("Send", new Vector2(btnW, 0)))
+        {
+            Send();
         }
 
         ImGui.EndChild();
-        ImGui.PopStyleColor();
-        ImGui.Spacing();
     }
 
-    // ---------- Public helpers for streaming ----------
+    private void Send()
+    {
+        var text = _userInput?.Trim();
+        if (string.IsNullOrEmpty(text)) return;
 
+        AppendUserLine(text);
+        _userInput = string.Empty;
+
+        // Raise to PluginMain so it can stream via backend
+        OnSend?.Invoke(text);
+    }
+
+    // =========================
+    //     Public hooks
+    // =========================
+
+    /// <summary>Append a complete assistant line (non-streamed).</summary>
     public void AppendAssistant(string text)
     {
-        if (!string.IsNullOrEmpty(text))
-            _lines.Add(("assistant", text));
+        AppendAssistantLine(text);
     }
 
+    /// <summary>Begin streaming the assistant's reply.</summary>
     public void BeginAssistantStream()
     {
-        _streamSb.Clear();
+        _assistantStream.Clear();
+        _autoScrollAssistant = true; // stick to bottom while streaming
     }
 
+    /// <summary>Append a streaming chunk for the assistant's reply.</summary>
     public void AppendAssistantDelta(string delta)
     {
-        if (!string.IsNullOrEmpty(delta))
-            _streamSb.Append(delta);
+        if (string.IsNullOrEmpty(delta)) return;
+
+        // Ensure lines break nicely when backend doesn't include \n
+        _assistantStream.Append(delta);
     }
 
+    /// <summary>Seal the current streaming reply into the transcript.</summary>
     public void EndAssistantStream()
     {
-        if (_streamSb.Length > 0)
+        var final = _assistantStream.ToString().TrimEnd();
+        if (final.Length > 0)
         {
-            _lines.Add(("assistant", _streamSb.ToString()));
-            _streamSb.Clear();
+            if (_assistantTranscript.Length > 0 && !EndsWithNewline(_assistantTranscript))
+                _assistantTranscript.AppendLine();
+            _assistantTranscript.AppendLine(final);
+            _lastAssistantReply = final;
         }
+        _assistantStream.Clear();
     }
 
-    public void AppendSystem(string text)
+    // =========================
+    //     Internals
+    // =========================
+
+    private void AppendUserLine(string text)
     {
-        if (!string.IsNullOrEmpty(text))
-            _lines.Add(("system", text));
+        var me = string.IsNullOrWhiteSpace(_config.ChatDisplayName) ? "You" : _config.ChatDisplayName;
+        if (_userTranscript.Length > 0 && !EndsWithNewline(_userTranscript))
+            _userTranscript.AppendLine();
+        // Prefix with your display name to keep context clear
+        _userTranscript.AppendLine($"{me}: {text}");
+        _autoScrollUser = true;
     }
 
-    private void AppendUser(string text)
+    private void AppendAssistantLine(string text)
     {
-        _lines.Add(("you", text));
+        if (_assistantTranscript.Length > 0 && !EndsWithNewline(_assistantTranscript))
+            _assistantTranscript.AppendLine();
+        _assistantTranscript.AppendLine(text);
+        _lastAssistantReply = text;
+        _autoScrollAssistant = true;
+    }
+
+    private static bool EndsWithNewline(StringBuilder sb)
+    {
+        if (sb.Length == 0) return true;
+        char c = sb[^1];
+        return c == '\n' || c == '\r';
     }
 
     private string Sanitize(string s)
