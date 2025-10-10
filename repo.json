@@ -18,9 +18,8 @@
       "Changelog": "v1.0.0.1: repo fixes, memory window tweaks.",
       "IsHide": false,
       "IsTestingExclusive": false,
-
-      "DownloadLinkInstall": "https://github.com/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV/releases/download/v1.0.0.1/NunuTheAICompanion_v1.0.0.1.zip",
-      "DownloadLinkUpdate": "https://github.com/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV/releases/download/v1.0.0.1/NunuTheAICompanion_v1.0.0.1.zip"
+      "DownloadLinkInstall": "https://raw.githubusercontent.com/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV/master/dist/NunuTheAICompanion-1.0.0.1.zip",
+      "DownloadLinkUpdate": "https://raw.githubusercontent.com/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV/master/dist/NunuTheAICompanion-1.0.0.1.zip"
     }
   ]
 }
