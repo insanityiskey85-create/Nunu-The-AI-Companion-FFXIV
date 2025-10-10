@@ -40,7 +40,6 @@
 
 	<!-- Copy your chosen manifest file name -->
 	<ItemGroup>
-		<None Include="NunuTheAiCompanion.json" CopyToOutputDirectory="PreserveNewest" />
 		<!-- keep this if you still want to ship it for reference; otherwise remove -->
 		<None Include="dalamudpackager.json" CopyToOutputDirectory="PreserveNewest" />
 	</ItemGroup>
