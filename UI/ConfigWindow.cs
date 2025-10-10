@@ -40,6 +40,9 @@ public sealed class ConfigWindow : Window
     private bool _debugListen;
     private bool _debugMirror;
 
+    // Chat display
+    private string _chatDisplayName;
+
     private static readonly HttpClient _http = new();
     private string _testStatus = "";
     private bool _testing = false;
@@ -75,6 +78,9 @@ public sealed class ConfigWindow : Window
         // diagnostics
         _debugListen = _config.DebugListen;
         _debugMirror = _config.DebugMirrorToWindow;
+
+        // chat display
+        _chatDisplayName = _config.ChatDisplayName;
 
         RespectCloseHotkey = true;
         Flags |= ImGuiWindowFlags.AlwaysAutoResize;
@@ -166,6 +172,13 @@ public sealed class ConfigWindow : Window
 
         ImGui.Separator();
 
+        // ---------- Chat Display ----------
+        ImGui.TextUnformatted("Your display name (shown instead of \"You\")");
+        ImGui.InputText("##displayname", ref _chatDisplayName, 128);
+        ImGui.TextDisabled("Set this to: Real Nunu");
+
+        ImGui.Separator();
+
         // ---------- Diagnostics ----------
         ImGui.Checkbox("Debug: log all heard chat events", ref _debugListen);
         ImGui.SameLine();
@@ -208,6 +221,8 @@ public sealed class ConfigWindow : Window
 
             _config.DebugListen = _debugListen;
             _config.DebugMirrorToWindow = _debugMirror;
+
+            _config.ChatDisplayName = string.IsNullOrWhiteSpace(_chatDisplayName) ? "You" : _chatDisplayName.Trim();
 
             _config.WindowOpacity = _opacity;
 

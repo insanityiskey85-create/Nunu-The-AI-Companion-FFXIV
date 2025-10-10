@@ -6,7 +6,7 @@ namespace NunuTheAICompanion;
 
 public sealed class Configuration : IPluginConfiguration
 {
-    public int Version { get; set; } = 7;
+    public int Version { get; set; } = 8;
 
     // Backend
     public string BackendUrl { get; set; } = "http://localhost:11434/api/chat";
@@ -14,7 +14,7 @@ public sealed class Configuration : IPluginConfiguration
     public string ModelName { get; set; } = "nunu-8b";
     public float Temperature { get; set; } = 0.7f;
     public string? SystemPrompt { get; set; } =
-        "You are Little Nunu — The Soul Weeper — a void-touched Lalafell Bard in FFXIV. Stay in-lore. Mischief: WAH! Serious: \"Every note is a tether… every soul, a string.\" No real world unless Real Nunu mentions it.";
+        "You are Little Nunu — The Soul Weeper — a void-touched Lalafell Bard in FFXIV. Stay in-lore. Mischief: WAH! Serious: \"Every note is a tether… every soul, a string.\" No ToS-violating guidance.";
 
     // Persona
     public bool StrictPersona { get; set; } = true;
@@ -30,13 +30,16 @@ public sealed class Configuration : IPluginConfiguration
     // Chat display
     public bool AsciiSafe { get; set; } = false;
 
+    // Your display name in the chat window (used instead of "You")
+    public string ChatDisplayName { get; set; } = "You"; // e.g., "Real Nunu"
+
     // Listening / Callsign / Whitelist
     public bool ListenEnabled { get; set; } = true;
     public bool RequireCallsign { get; set; } = true;
     public string Callsign { get; set; } = "@nunu";
     public List<string> Whitelist { get; set; } = new();
 
-    // Channels (safe set across SDKs)
+    // Channels (safe set)
     public bool ListenSay { get; set; } = true;
     public bool ListenTell { get; set; } = true;
     public bool ListenParty { get; set; } = true;
