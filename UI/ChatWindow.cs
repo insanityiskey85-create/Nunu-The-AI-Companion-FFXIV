@@ -1,245 +1,167 @@
-﻿using System.Numerics;
-using System.Threading;
-using Dalamud.Interface.Utility;
+﻿using System;
+using System.Collections.Generic;
+using System.Numerics;
+using System.Text;
 using Dalamud.Interface.Windowing;
-using NunuTheAICompanion.Services;
-// ImGui bindings
-using ImGui = Dalamud.Bindings.ImGui.ImGui;
-using ImGuiCol = Dalamud.Bindings.ImGui.ImGuiCol;
-using ImGuiStyleVar = Dalamud.Bindings.ImGui.ImGuiStyleVar;
 
-namespace NunuTheAICompanion.UI;
-
-public sealed class ChatWindow : Window
+namespace NunuTheAICompanion.UI
 {
-    private readonly Configuration _config;
-    private readonly OllamaClient _client;
-    private readonly MemoryService? _memory;
-
-    private readonly object _gate = new();
-    private readonly List<(string role, string content)> _messages = new();
-
-    private string _input = string.Empty;
-    private bool _rememberNext = true;
-    private bool _isStreaming = false;
-    private bool _autoScroll = true;
-    private CancellationTokenSource? _cts;
-
-    public ChatWindow(Configuration config, MemoryService? memory = null)
-        : base("Little Nunu — Soul Chat")
+    /// <summary>
+    /// Continuous chat log with streaming helpers, like your reference.
+    /// Uses fully-qualified Dalamud ImGui to avoid alias issues.
+    /// </summary>
+    public sealed class ChatWindow : Window
     {
-        _config = config;
-        _memory = memory;
-        _client = new OllamaClient(new HttpClient(), _config);
+        private readonly Configuration _config;
 
-        SizeConstraints = new WindowSizeConstraints
+        private readonly List<(string role, string text)> _lines = new();
+        private readonly StringBuilder _streamSb = new();
+
+        private string _userInput = string.Empty;
+        private bool _autoScroll = true;
+
+        // First-draw size application
+        public new Vector2 Size { get => _initialSize; set => _initialSize = value; }
+        private Vector2 _initialSize = new(640, 420);
+        private bool _didFirstSizeApply;
+
+        /// <summary>Raised when player clicks Send with non-empty input.</summary>
+        public event Action<string>? OnSend;
+
+        public ChatWindow(Configuration config)
+            : base("Little Nunu — Soul Chat##NunuTheAICompanion")
         {
-            MinimumSize = new Vector2(520, 380),
-            MaximumSize = new Vector2(9999, 9999)
-        };
+            _config = config ?? throw new ArgumentNullException(nameof(config));
 
-        RespectCloseHotkey = true;
-        IsOpen = _config.StartOpen;
-
-        var hello = "WAH! Little Nunu listens by the campfire. What tale shall we stitch?";
-        lock (_gate) _messages.Add(("assistant", hello));
-        _memory?.Append("assistant", hello, topic: "greeting");
-    }
-
-    public override void Draw()
-    {
-        ImGui.PushStyleVar(ImGuiStyleVar.Alpha, _config.WindowOpacity);
-        DrawToolbar();
-        ImGui.Separator();
-        DrawTranscript();
-        ImGui.Separator();
-        DrawComposer();
-        ImGui.PopStyleVar();
-    }
-
-    private void DrawToolbar()
-    {
-        if (!ImGui.BeginChild("toolbar", new Vector2(0, 28 * ImGuiHelpers.GlobalScale), false))
-        { ImGui.EndChild(); return; }
-
-        ImGui.TextUnformatted("Nunu The AI Companion — ToS-safe chat only");
-        ImGui.SameLine(); ImGui.TextDisabled(" | "); ImGui.SameLine();
-        ImGui.TextUnformatted($"Backend: {_config.BackendMode}@{_config.BackendUrl}");
-
-        if (_memory is not null)
-        {
-            ImGui.SameLine(); ImGui.TextDisabled(" | "); ImGui.SameLine();
-            bool enabled = _memory.Enabled;
-            if (ImGui.Checkbox("Memory", ref enabled))
+            SizeConstraints = new WindowSizeConstraints
             {
-                _memory.Enabled = enabled;
-                _config.MemoryEnabled = enabled;
-                _config.Save();
+                MinimumSize = new Vector2(420, 240),
+                MaximumSize = new Vector2(4096, 4096),
+            };
+
+            RespectCloseHotkey = true;
+            IsOpen = _config.StartOpen;
+        }
+
+        public override void PreDraw()
+        {
+            if (!_didFirstSizeApply)
+            {
+                Dalamud.Bindings.ImGui.ImGui.SetNextWindowSize(
+                    _initialSize,
+                    Dalamud.Bindings.ImGui.ImGuiCond.FirstUseEver
+                );
+                _didFirstSizeApply = true;
             }
         }
 
-        ImGui.SameLine();
-        if (ImGui.SmallButton("Opacity+"))
+        public override void Draw()
         {
-            _config.WindowOpacity = Math.Clamp(_config.WindowOpacity + 0.05f, 0.3f, 1.0f);
-            _config.Save();
-        }
+            // Transcript (fills most of the window height; input row is ~60px)
+            Dalamud.Bindings.ImGui.ImGui.BeginChild(
+                "nunu_log",
+                new Vector2(0, -60),
+                true,
+                Dalamud.Bindings.ImGui.ImGuiWindowFlags.HorizontalScrollbar
+            );
 
-        ImGui.EndChild();
-    }
-
-    private void DrawTranscript()
-    {
-        // Reserve most of the window height for the transcript
-        float availY = ImGui.GetContentRegionAvail().Y - (110 * ImGuiHelpers.GlobalScale);
-        if (availY < 140) availY = 140;
-
-        if (!ImGui.BeginChild("transcript", new Vector2(0, availY), true))
-        { ImGui.EndChild(); return; }
-
-        // Take a snapshot so draw isn't racing the stream thread
-        List<(string role, string content)> snapshot;
-        lock (_gate) snapshot = _messages.ToList();
-
-        // Detect if user scrolled up; only autoscroll if at bottom
-        bool atBottom = ImGui.GetScrollY() >= ImGui.GetScrollMaxY() - 5f;
-
-        for (int i = 0; i < snapshot.Count; i++)
-        {
-            var (role, content) = snapshot[i];
-            bool isUser = role == "user";
-
-            // Bubble background
-            ImGui.PushStyleColor(ImGuiCol.ChildBg,
-                isUser ? new Vector4(0.10f, 0.12f, 0.16f, 0.65f)
-                       : new Vector4(0.20f, 0.00f, 0.20f, 0.50f));
-
-            // One bubble per message; no nested windows-per-line
-            ImGui.BeginChild($"msg_{i}", new Vector2(0, 0), true);
-
-            // Small header
-            ImGui.PushStyleColor(ImGuiCol.Text, isUser
-                ? new Vector4(0.8f, 0.85f, 1.0f, 0.9f)
-                : new Vector4(1.0f, 0.8f, 1.0f, 0.9f));
-            ImGui.TextUnformatted(isUser ? "You" : "Little Nunu");
-            ImGui.PopStyleColor();
-
-            // Content (streaming may still be mid-flight)
-            if (string.IsNullOrEmpty(content))
+            foreach (var (role, text) in _lines)
             {
-                // Show a soft typing indicator if assistant bubble is still empty
-                if (!isUser)
-                    ImGui.TextDisabled("…tuning the voidstrings");
-            }
-            else
-            {
-                ImGui.TextWrapped(content);
+                Dalamud.Bindings.ImGui.ImGui.PushTextWrapPos();
+                if (role.Equals("assistant", StringComparison.OrdinalIgnoreCase))
+                    Dalamud.Bindings.ImGui.ImGui.TextWrapped($"> {Sanitize(text)}");
+                else
+                    Dalamud.Bindings.ImGui.ImGui.TextWrapped($"{role}: {Sanitize(text)}");
+                Dalamud.Bindings.ImGui.ImGui.PopTextWrapPos();
             }
 
-            ImGui.EndChild();
-            ImGui.PopStyleColor();
-            ImGui.Spacing();
-        }
-
-        // Auto-scroll if near bottom or a new chunk arrived and _autoScroll wants it
-        if (_autoScroll || atBottom)
-            ImGui.SetScrollHereY(1.0f);
-
-        ImGui.EndChild();
-    }
-
-    private void DrawComposer()
-    {
-        if (!ImGui.BeginChild("composer", new Vector2(0, 0), false))
-        { ImGui.EndChild(); return; }
-
-        ImGui.Checkbox("Remember", ref _rememberNext);
-        ImGui.SameLine();
-
-        float btnW = 120 * ImGuiHelpers.GlobalScale;
-        var inputW = ImGui.GetContentRegionAvail().X - (btnW + 8 * ImGuiHelpers.GlobalScale);
-        if (inputW < 120) inputW = 120;
-
-        ImGui.InputTextMultiline("##input", ref _input, 8000, new Vector2(inputW, 80 * ImGuiHelpers.GlobalScale));
-        ImGui.SameLine();
-
-        var canSend = !_isStreaming && !string.IsNullOrWhiteSpace(_input);
-        if (ImGui.Button("Sing", new Vector2(btnW, 80 * ImGuiHelpers.GlobalScale)) && canSend)
-        {
-            Send();
-        }
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Send to Nunu");
-
-        ImGui.EndChild();
-    }
-
-    private void Send()
-    {
-        var text = _input.Trim();
-        if (string.IsNullOrEmpty(text)) return;
-
-        lock (_gate) _messages.Add(("user", text));
-        if (_rememberNext && _memory?.Enabled == true)
-            _memory.Append("user", text, topic: "chat");
-
-        _input = string.Empty;
-        _autoScroll = true;
-        StreamAsync();
-    }
-
-    private async void StreamAsync()
-    {
-        if (_isStreaming) return;
-        _isStreaming = true;
-        _cts?.Cancel();
-        _cts = new CancellationTokenSource();
-
-        // Add local assistant placeholder (will be filled by stream)
-        int idx;
-        lock (_gate)
-        {
-            _messages.Add(("assistant", string.Empty));
-            idx = _messages.Count - 1;
-        }
-
-        // Build history for backend WITHOUT the trailing empty assistant
-        List<(string role, string content)> history;
-        lock (_gate)
-        {
-            history = _messages
-                .Where((m, i) => !(i == idx && m.role == "assistant"))
-                .ToList();
-        }
-
-        try
-        {
-            await foreach (var chunk in _client.StreamChatAsync(_config.BackendUrl, history, _cts.Token))
+            // Streaming line (if a reply is in progress)
+            if (_streamSb.Length > 0)
             {
-                if (string.IsNullOrEmpty(chunk)) continue;
+                Dalamud.Bindings.ImGui.ImGui.PushTextWrapPos();
+                Dalamud.Bindings.ImGui.ImGui.TextWrapped($"> {Sanitize(_streamSb.ToString())}_");
+                Dalamud.Bindings.ImGui.ImGui.PopTextWrapPos();
+            }
 
-                lock (_gate)
-                {
-                    var current = _messages[idx].content;
-                    _messages[idx] = ("assistant", current + chunk);
-                }
-                _autoScroll = true; // keep transcript pinned to latest during stream
+            if (_autoScroll &&
+                Dalamud.Bindings.ImGui.ImGui.GetScrollY() >= Dalamud.Bindings.ImGui.ImGui.GetScrollMaxY() - 4)
+            {
+                Dalamud.Bindings.ImGui.ImGui.SetScrollHereY(1.0f);
+            }
+
+            Dalamud.Bindings.ImGui.ImGui.EndChild();
+
+            // Composer row
+            Dalamud.Bindings.ImGui.ImGui.PushItemWidth(-120);
+            Dalamud.Bindings.ImGui.ImGui.InputText("##nunu_input", ref _userInput, 4000);
+            Dalamud.Bindings.ImGui.ImGui.PopItemWidth();
+            Dalamud.Bindings.ImGui.ImGui.SameLine();
+
+            bool send = Dalamud.Bindings.ImGui.ImGui.Button("Send");
+            Dalamud.Bindings.ImGui.ImGui.SameLine();
+            Dalamud.Bindings.ImGui.ImGui.Checkbox("Auto-scroll", ref _autoScroll);
+
+            if (send && !string.IsNullOrWhiteSpace(_userInput))
+            {
+                var text = _userInput.Trim();
+                AppendUser(text);
+                _userInput = string.Empty;
+
+                // Let PluginMain forward to backend
+                OnSend?.Invoke(text);
             }
         }
-        catch (Exception ex)
+
+        // ---------- Public helpers for streaming ----------
+
+        public void AppendAssistant(string text)
         {
-            lock (_gate) _messages[idx] = ("assistant", $"The strings tangled: {ex.Message}");
+            if (!string.IsNullOrEmpty(text))
+                _lines.Add(("assistant", text));
         }
-        finally
+
+        public void BeginAssistantStream()
         {
-            _isStreaming = false;
+            _streamSb.Clear();
+        }
 
-            // Persist assistant reply when finished
-            string reply;
-            lock (_gate) reply = _messages[idx].content.Trim();
+        public void AppendAssistantDelta(string delta)
+        {
+            if (!string.IsNullOrEmpty(delta))
+                _streamSb.Append(delta);
+        }
 
-            if (!string.IsNullOrEmpty(reply) && _memory?.Enabled == true)
-                _memory.Append("assistant", reply, topic: "chat");
+        public void EndAssistantStream()
+        {
+            if (_streamSb.Length > 0)
+            {
+                _lines.Add(("assistant", _streamSb.ToString()));
+                _streamSb.Clear();
+            }
+        }
+
+        public void AppendSystem(string text)
+        {
+            if (!string.IsNullOrEmpty(text))
+                _lines.Add(("system", text));
+        }
+
+        // ---------- Internals ----------
+
+        private void AppendUser(string text)
+        {
+            _lines.Add(("you", text));
+        }
+
+        private string Sanitize(string s)
+        {
+            if (!_config.AsciiSafe || string.IsNullOrEmpty(s))
+                return s ?? string.Empty;
+
+            var sb = new StringBuilder(s.Length);
+            foreach (var ch in s)
+                sb.Append(ch is >= (char)0x20 and <= (char)0x7E ? ch : '?');
+            return sb.ToString();
         }
     }
 }
