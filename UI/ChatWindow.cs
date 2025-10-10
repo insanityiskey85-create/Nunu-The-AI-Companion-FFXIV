@@ -9,6 +9,11 @@ using ImGuiStyleVar = Dalamud.Bindings.ImGui.ImGuiStyleVar;
 
 namespace NunuTheAICompanion.UI;
 
+/// <summary>
+/// Two-pane chat: left = You, right = Little Nunu.
+/// Streams assistant text without relying on newline tokens.
+/// Filters out the trailing empty assistant from the backend request to avoid backend silence.
+/// </summary>
 public sealed class ChatWindow : Window
 {
     private readonly Configuration _config;
@@ -61,6 +66,7 @@ public sealed class ChatWindow : Window
             ImGui.TextDisabled(" | ");
             ImGui.SameLine();
             ImGui.TextUnformatted($"Backend: {_config.BackendUrl}");
+
             if (_memory is not null)
             {
                 ImGui.SameLine();
@@ -87,16 +93,14 @@ public sealed class ChatWindow : Window
 
     private void DrawSplitTranscript()
     {
-        // available vertical space for panes
         float paneHeight = ImGui.GetContentRegionAvail().Y - (110 * ImGuiHelpers.GlobalScale);
         if (paneHeight < 120) paneHeight = 120;
 
-        // width split
         float gap = 8 * ImGuiHelpers.GlobalScale;
         float totalW = ImGui.GetContentRegionAvail().X;
         float halfW = (totalW - gap) / 2f;
 
-        // left: USER
+        // LEFT: USER
         if (ImGui.BeginChild("pane_user", new Vector2(halfW, paneHeight), true))
         {
             ImGui.TextDisabled("You");
@@ -108,14 +112,13 @@ public sealed class ChatWindow : Window
                 if (string.IsNullOrWhiteSpace(content)) continue;
 
                 ImGui.PushStyleColor(ImGuiCol.ChildBg, new Vector4(0.10f, 0.12f, 0.16f, 0.65f));
-                ImGui.BeginChild($"user_{GetHashCode()}_{content.GetHashCode()}", new Vector2(0, 0), true);
+                ImGui.BeginChild($"user_{content.GetHashCode()}", new Vector2(0, 0), true);
                 ImGui.TextWrapped(content);
                 ImGui.EndChild();
                 ImGui.PopStyleColor();
                 ImGui.Spacing();
             }
 
-            // auto-scroll to bottom when new content arrives
             if (ImGui.GetScrollY() >= ImGui.GetScrollMaxY() - 5f)
                 ImGui.SetScrollHereY(1.0f);
         }
@@ -123,7 +126,7 @@ public sealed class ChatWindow : Window
 
         ImGui.SameLine();
 
-        // right: ASSISTANT (Nunu)
+        // RIGHT: ASSISTANT
         if (ImGui.BeginChild("pane_assistant", new Vector2(halfW, paneHeight), true))
         {
             ImGui.TextDisabled("Little Nunu");
@@ -135,7 +138,7 @@ public sealed class ChatWindow : Window
                 if (string.IsNullOrWhiteSpace(content)) continue;
 
                 ImGui.PushStyleColor(ImGuiCol.ChildBg, new Vector4(0.20f, 0.00f, 0.20f, 0.50f));
-                ImGui.BeginChild($"assistant_{GetHashCode()}_{content.GetHashCode()}", new Vector2(0, 0), true);
+                ImGui.BeginChild($"assistant_{content.GetHashCode()}", new Vector2(0, 0), true);
                 ImGui.TextWrapped(content);
                 ImGui.EndChild();
                 ImGui.PopStyleColor();
@@ -158,7 +161,6 @@ public sealed class ChatWindow : Window
             ImGui.Checkbox("Remember", ref _rememberNext);
             ImGui.SameLine();
 
-            // make the input field take the remaining width minus the button
             float btnW = 120 * ImGuiHelpers.GlobalScale;
             var inputW = ImGui.GetContentRegionAvail().X - (btnW + 8 * ImGuiHelpers.GlobalScale);
             if (inputW < 120) inputW = 120;
@@ -197,13 +199,18 @@ public sealed class ChatWindow : Window
         _cts?.Cancel();
         _cts = new CancellationTokenSource();
 
-        // Assistant placeholder (right pane). We'll append into this slot.
+        // 1) Add a local assistant placeholder for the right pane.
         _messages.Add(("assistant", string.Empty));
         int idx = _messages.Count - 1;
 
+        // 2) Build history WITHOUT the trailing empty assistant.
+        var history = _messages
+            .Where((m, i) => !(i == idx && m.role == "assistant"))
+            .ToList();
+
         try
         {
-            await foreach (var chunk in _client.StreamChatAsync(_config.BackendUrl, _messages, _cts.Token))
+            await foreach (var chunk in _client.StreamChatAsync(_config.BackendUrl, history, _cts.Token))
             {
                 if (string.IsNullOrEmpty(chunk)) continue;
                 _messages[idx] = ("assistant", _messages[idx].content + chunk);

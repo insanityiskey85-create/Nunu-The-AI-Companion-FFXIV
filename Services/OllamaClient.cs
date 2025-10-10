@@ -2,10 +2,13 @@
 using System.Text;
 using System.Text.Json;
 using System.Threading;
-using System.IO;
 
 namespace NunuTheAICompanion.Services;
 
+/// <summary>
+/// Streams plain-text responses from your local proxy.
+/// Reads by bytes (not lines), so it works whether the server inserts newlines or not.
+/// </summary>
 public sealed class OllamaClient
 {
     private readonly HttpClient _http;
@@ -16,7 +19,10 @@ public sealed class OllamaClient
         _http.Timeout = TimeSpan.FromSeconds(120);
     }
 
-    public async IAsyncEnumerable<string> StreamChatAsync(string backendUrl, List<(string role, string content)> messages, CancellationToken ct = default)
+    public async IAsyncEnumerable<string> StreamChatAsync(
+        string backendUrl,
+        List<(string role, string content)> messages,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
         var body = JsonSerializer.Serialize(new
         {
@@ -28,18 +34,21 @@ public sealed class OllamaClient
             Content = new StringContent(body, Encoding.UTF8, "application/json")
         };
 
-        using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+        using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct)
+                                    .ConfigureAwait(false);
         resp.EnsureSuccessStatusCode();
 
         await using var stream = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
-        using var reader = new StreamReader(stream, Encoding.UTF8);
+        var buffer = new byte[4096];
 
-        while (!reader.EndOfStream && !ct.IsCancellationRequested)
+        while (!ct.IsCancellationRequested)
         {
-            var line = await reader.ReadLineAsync().ConfigureAwait(false);
-            if (line is null) break;
-            if (line.Length == 0) continue;
-            yield return line;
+            var read = await stream.ReadAsync(buffer.AsMemory(0, buffer.Length), ct).ConfigureAwait(false);
+            if (read <= 0) break;
+
+            var chunk = Encoding.UTF8.GetString(buffer, 0, read);
+            if (!string.IsNullOrEmpty(chunk))
+                yield return chunk;
         }
     }
 }
