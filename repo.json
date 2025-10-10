@@ -26,7 +26,7 @@
       "DownloadLinkInstall": "https://github.com/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV/releases/download/v1.0.0/NunuTheAICompanion-1.0.0.zip",
       "DownloadLinkUpdate": "https://github.com/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV/releases/download/v1.0.0/NunuTheAICompanion-1.0.0.zip",
       "DownloadCount": 0,
-      "DownloadSHA256": "REPLACE_WITH_SHA256_OF_ZIP",
+      "DownloadSHA256": "sha256:3baf076a52bd576216179c5ab1f79665e2b5d419fcdd9613f50be973faf9984f",
 
       "AcceptsFeedback": true,
       "FeedbackMessage": "Open issues on the GitHub repository.",
