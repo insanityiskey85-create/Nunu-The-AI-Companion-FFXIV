@@ -5,10 +5,10 @@ namespace NunuTheAICompanion;
 
 public sealed class Configuration : IPluginConfiguration
 {
-    public int Version { get; set; } = 4;
+    public int Version { get; set; } = 5;
 
     // Backend
-    public string BackendUrl { get; set; } = "http://localhost:11434/api/chat"; // direct Ollama default
+    public string BackendUrl { get; set; } = "http://localhost:11434/api/chat"; // direct: Ollama
     public string BackendMode { get; set; } = "jsonl"; // "jsonl" | "sse" | "plaintext"
     public string ModelName { get; set; } = "nunu-8b";
     public float Temperature { get; set; } = 0.7f;
@@ -28,6 +28,23 @@ public sealed class Configuration : IPluginConfiguration
 
     // Chat display
     public bool AsciiSafe { get; set; } = false;
+
+    // Listening / Callsign / Whitelist
+    public bool ListenEnabled { get; set; } = true;
+    public bool RequireCallsign { get; set; } = true;
+    public string Callsign { get; set; } = "@nunu";
+    public List<string> Whitelist { get; set; } = new(); // names like "Edea Uematsu" or "Edea Uematsu@Zalera"
+
+    // Channels
+    public bool ListenSay { get; set; } = true;
+    public bool ListenShout { get; set; } = false;
+    public bool ListenYell { get; set; } = false;
+    public bool ListenTell { get; set; } = true;
+    public bool ListenParty { get; set; } = true;
+    public bool ListenAlliance { get; set; } = false;
+    public bool ListenFreeCompany { get; set; } =true;
+    public bool ListenLinkshells { get; set; } = false;
+    public bool ListenCrossLinkshells { get; set; } = false;
 
     [System.NonSerialized] private IDalamudPluginInterface? _pluginInterface;
 

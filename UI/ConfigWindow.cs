@@ -8,7 +8,6 @@ using System.Text.Json;
 // ImGui bindings
 using ImGui = Dalamud.Bindings.ImGui.ImGui;
 using ImGuiCol = Dalamud.Bindings.ImGui.ImGuiCol;
-using ImGuiStyleVar = Dalamud.Bindings.ImGui.ImGuiStyleVar;
 
 namespace NunuTheAICompanion.UI;
 
@@ -16,13 +15,23 @@ public sealed class ConfigWindow : Window
 {
     private readonly Configuration _config;
 
+    // Backend
     private string _backend;
     private string _backendMode; // "jsonl" | "sse" | "plaintext"
     private string _model;
-    private float _opacity;
     private float _temperature;
-    private bool _strictPersona;
     private string _systemPrompt;
+    private float _opacity;
+    private bool _strictPersona;
+
+    // Listening
+    private bool _listenEnabled;
+    private bool _requireCallsign;
+    private string _callsign;
+    private string _whitelistCsv;
+
+    // Channels
+    private bool _say, _tell, _party, _alliance, _fc, _shout, _yell;
 
     private static readonly HttpClient _http = new();
     private string _testStatus = "";
@@ -32,13 +41,29 @@ public sealed class ConfigWindow : Window
     {
         _config = config;
 
-        _backend = config.BackendUrl;
-        _backendMode = config.BackendMode;
-        _model = config.ModelName;
-        _opacity = config.WindowOpacity;
-        _temperature = config.Temperature;
-        _strictPersona = config.StrictPersona;
-        _systemPrompt = config.SystemPrompt ?? "";
+        // backend
+        _backend = _config.BackendUrl;
+        _backendMode = _config.BackendMode;
+        _model = _config.ModelName;
+        _temperature = _config.Temperature;
+        _systemPrompt = _config.SystemPrompt ?? "";
+        _opacity = _config.WindowOpacity;
+        _strictPersona = _config.StrictPersona;
+
+        // listening
+        _listenEnabled = _config.ListenEnabled;
+        _requireCallsign = _config.RequireCallsign;
+        _callsign = _config.Callsign ?? "@nunu";
+        _whitelistCsv = string.Join(", ", _config.Whitelist ?? new());
+
+        // channels
+        _say = _config.ListenSay;
+        _tell = _config.ListenTell;
+        _party = _config.ListenParty;
+        _alliance = _config.ListenAlliance;
+        _fc = _config.ListenFreeCompany;
+        _shout = _config.ListenShout;
+        _yell = _config.ListenYell;
 
         RespectCloseHotkey = true;
         Flags |= ImGuiWindowFlags.AlwaysAutoResize;
@@ -50,6 +75,7 @@ public sealed class ConfigWindow : Window
         ImGui.TextUnformatted("Nunu The AI Companion — Settings");
         ImGui.Separator();
 
+        // -------- Backend --------
         ImGui.TextUnformatted("Backend Mode");
         var modes = new[] { "jsonl", "sse", "plaintext" };
         int idx = System.Array.IndexOf(modes, _backendMode);
@@ -67,8 +93,7 @@ public sealed class ConfigWindow : Window
             }
             ImGui.EndCombo();
         }
-        ImGui.SameLine();
-        ImGui.TextDisabled("(jsonl = direct Ollama /api/chat, sse/plaintext = proxy)");
+        ImGui.SameLine(); ImGui.TextDisabled("(jsonl = direct Ollama /api/chat, sse/plaintext = proxy)");
 
         ImGui.TextUnformatted("Backend URL");
         ImGui.InputText("##backend", ref _backend, 1024);
@@ -105,6 +130,30 @@ public sealed class ConfigWindow : Window
 
         ImGui.Separator();
 
+        // -------- Chat Listening --------
+        ImGui.TextUnformatted("Chat Listening");
+        ImGui.Checkbox("Enable listening", ref _listenEnabled);
+
+        ImGui.Checkbox("Require callsign", ref _requireCallsign);
+        ImGui.SameLine();
+        ImGui.InputText("Callsign", ref _callsign, 64);
+        ImGui.TextDisabled("Example: @nunu (match is case-insensitive)");
+
+        ImGui.TextUnformatted("Whitelist (comma-separated names, optional)");
+        ImGui.InputTextMultiline("##wl", ref _whitelistCsv, 8000, new Vector2(520, 60));
+        ImGui.TextDisabled("Accepted: Name or Name@World. Empty = allow anyone.");
+
+        ImGui.TextUnformatted("Channels to listen");
+        ImGui.Checkbox("Say", ref _say); ImGui.SameLine();
+        ImGui.Checkbox("Tell", ref _tell); ImGui.SameLine();
+        ImGui.Checkbox("Party", ref _party); ImGui.SameLine();
+        ImGui.Checkbox("Alliance", ref _alliance); ImGui.SameLine();
+        ImGui.Checkbox("FC", ref _fc);
+        ImGui.Checkbox("Shout", ref _shout); ImGui.SameLine();
+        ImGui.Checkbox("Yell", ref _yell);
+
+        ImGui.Separator();
+
         ImGui.TextUnformatted("Window Opacity");
         ImGui.SliderFloat("##opacity", ref _opacity, 0.30f, 1.00f, "%.2f");
 
@@ -114,10 +163,33 @@ public sealed class ConfigWindow : Window
             _config.BackendUrl = _backend.Trim();
             _config.BackendMode = _backendMode.Trim().ToLowerInvariant();
             _config.ModelName = _model.Trim();
-            _config.WindowOpacity = _opacity;
             _config.Temperature = _temperature;
-            _config.StrictPersona = _strictPersona;
             _config.SystemPrompt = string.IsNullOrWhiteSpace(_systemPrompt) ? null : _systemPrompt;
+            _config.StrictPersona = _strictPersona;
+
+            _config.ListenEnabled = _listenEnabled;
+            _config.RequireCallsign = _requireCallsign;
+            _config.Callsign = string.IsNullOrWhiteSpace(_callsign) ? "@nunu" : _callsign.Trim();
+
+            // parse whitelist
+            var list = new List<string>();
+            foreach (var raw in (_whitelistCsv ?? string.Empty).Split(',', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var s = raw.Trim();
+                if (s.Length > 0) list.Add(s);
+            }
+            _config.Whitelist = list;
+
+            _config.ListenSay = _say;
+            _config.ListenTell = _tell;
+            _config.ListenParty = _party;
+            _config.ListenAlliance = _alliance;
+            _config.ListenFreeCompany = _fc;
+            _config.ListenShout = _shout;
+            _config.ListenYell = _yell;
+
+            _config.WindowOpacity = _opacity;
+
             _config.Save();
             IsOpen = false;
         }
@@ -130,8 +202,7 @@ public sealed class ConfigWindow : Window
 
     private async System.Threading.Tasks.Task RunTestAsync()
     {
-        _testing = true;
-        _testStatus = "Testing…";
+        _testing = true; _testStatus = "Testing…";
         try
         {
             var mode = (_backendMode ?? "jsonl").ToLowerInvariant();
@@ -171,9 +242,7 @@ public sealed class ConfigWindow : Window
                 req.Headers.TryAddWithoutValidation("Accept", "text/event-stream");
 
             using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
-            _testStatus = resp.IsSuccessStatusCode
-                ? "OK: backend reachable."
-                : $"ERR: HTTP {(int)resp.StatusCode} {resp.ReasonPhrase}";
+            _testStatus = resp.IsSuccessStatusCode ? "OK: backend reachable." : $"ERR: HTTP {(int)resp.StatusCode} {resp.ReasonPhrase}";
         }
         catch (System.Exception ex)
         {
