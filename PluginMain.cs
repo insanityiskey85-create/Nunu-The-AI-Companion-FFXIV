@@ -14,8 +14,9 @@ using NunuTheAICompanion.Services;
 using NunuTheAICompanion.Interop;
 using NunuTheAICompanion.UI;
 using Nunu_The_AI_Companion.UI;
+using Nunu_The_AI_Companion;
 
-namespace Nunu_The_AI_Companion;
+namespace NunuTheAICompanion;
 
 public sealed class PluginMain : IDalamudPlugin
 {
