@@ -36,6 +36,9 @@ public sealed class MemoryService
         _filePath = Path.Combine(_dir, "memory.jsonl");
     }
 
+    public string StorageDirectory => _dir;
+    public string StorageFile => _filePath;
+
     public void Load()
     {
         if (!_enabled) return;
@@ -56,7 +59,6 @@ public sealed class MemoryService
                 catch { /* skip bad line */ }
             }
 
-            // keep only last _maxEntries in memory
             if (_entries.Count > _maxEntries)
                 _entries.RemoveRange(0, _entries.Count - _maxEntries);
         }
@@ -79,11 +81,9 @@ public sealed class MemoryService
             if (_entries.Count > _maxEntries)
                 _entries.RemoveRange(0, _entries.Count - _maxEntries);
 
-            // append to disk
             var json = JsonSerializer.Serialize(e);
             File.AppendAllText(_filePath, json + "\n", Encoding.UTF8);
 
-            // rotate if file gets very large (>10 MB): rewrite the last _maxEntries
             try
             {
                 var fi = new FileInfo(_filePath);
@@ -99,8 +99,29 @@ public sealed class MemoryService
         if (!_enabled) return;
         lock (_gate)
         {
-            // ensure file exists; rewrite the tail to be safe
             RewriteTailNoLock();
+        }
+    }
+
+    /// <summary>Dangerous: wipes all persisted memories and in-memory cache.</summary>
+    public void ClearAll()
+    {
+        if (!_enabled) return;
+        lock (_gate)
+        {
+            _entries.Clear();
+            try
+            {
+                if (File.Exists(_filePath))
+                {
+                    var tmp = _filePath + ".wipe";
+                    using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None))
+                    { /* create empty file */ }
+                    File.Copy(tmp, _filePath, overwrite: true);
+                    File.Delete(tmp);
+                }
+            }
+            catch { /* best-effort */ }
         }
     }
 
@@ -118,7 +139,6 @@ public sealed class MemoryService
         File.Delete(tmp);
     }
 
-    /// <summary>Return last N entries as (role, content) for LLM context.</summary>
     public List<(string role, string content)> GetRecentForContext(int count)
     {
         var list = new List<(string role, string content)>();
@@ -135,7 +155,7 @@ public sealed class MemoryService
         return list;
     }
 
-    public List<Entry> Snapshot() // for UI listing/export
+    public List<Entry> Snapshot()
     {
         lock (_gate) return new List<Entry>(_entries);
     }
