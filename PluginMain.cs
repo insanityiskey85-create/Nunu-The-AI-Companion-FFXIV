@@ -14,7 +14,6 @@ using NunuTheAICompanion.Services;
 using NunuTheAICompanion.Interop;
 using NunuTheAICompanion.UI;
 using Nunu_The_AI_Companion.UI;
-using Nunu_The_AI_Companion.Services;
 
 namespace Nunu_The_AI_Companion;
 
