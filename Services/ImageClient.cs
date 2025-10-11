@@ -20,6 +20,9 @@ public sealed class ImageClient
         _http = http ?? throw new ArgumentNullException(nameof(http));
         _config = config ?? throw new ArgumentNullException(nameof(config));
 
+        // Remove global timeout so we control it per request.
+        _http.Timeout = System.Threading.Timeout.InfiniteTimeSpan;
+
         _baseSave = string.IsNullOrWhiteSpace(_config.ImageSaveDir)
             ? defaultSaveDir
             : _config.ImageSaveDir;
@@ -55,7 +58,7 @@ public sealed class ImageClient
         float? cfg,
         string? sampler,
         int? seed,
-        CancellationToken token)
+        CancellationToken externalToken)
     {
         var url = $"{_config.ImageBackendUrl?.TrimEnd('/')}/sdapi/v1/txt2img";
 
@@ -70,7 +73,6 @@ public sealed class ImageClient
             sampler_name = string.IsNullOrWhiteSpace(sampler) ? _config.ImgSampler : sampler,
             seed = seed ?? -1,
             enable_hr = false,
-            // You can add more A1111 options here as needed
         };
 
         var json = JsonSerializer.Serialize(body);
@@ -79,10 +81,16 @@ public sealed class ImageClient
             Content = new StringContent(json, Encoding.UTF8, "application/json")
         };
 
-        using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
+        // Apply per-request timeout from config but still honor external cancellation
+        using var ctsTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(
+            Math.Clamp(_config.ImageRequestTimeoutSec, 30, 36000))); // 30s .. 10h
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(externalToken, ctsTimeout.Token);
+
+        using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, linked.Token)
+                                    .ConfigureAwait(false);
         resp.EnsureSuccessStatusCode();
 
-        var payload = await resp.Content.ReadAsStringAsync(token).ConfigureAwait(false);
+        var payload = await resp.Content.ReadAsStringAsync(linked.Token).ConfigureAwait(false);
         using var doc = JsonDocument.Parse(payload);
         var root = doc.RootElement;
 
@@ -97,7 +105,7 @@ public sealed class ImageClient
                 byte[] data = Convert.FromBase64String(b64);
 
                 var file = Path.Combine(_baseSave, MakeFileName(i));
-                await File.WriteAllBytesAsync(file, data, token).ConfigureAwait(false);
+                await File.WriteAllBytesAsync(file, data, linked.Token).ConfigureAwait(false);
                 list.Add(file);
                 i++;
             }

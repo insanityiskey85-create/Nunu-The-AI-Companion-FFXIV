@@ -2,7 +2,6 @@
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Numerics;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Dalamud.Interface.Utility;
@@ -58,6 +57,8 @@ public sealed class ImageWindow : Window
     public override void Draw()
     {
         ImGui.TextUnformatted($"Backend: {(_config.ImageBackendMode ?? "auto1111")} @ {(_config.ImageBackendUrl ?? "")}");
+        ImGui.SameLine();
+        ImGui.TextDisabled($"  |  Timeout: {_config.ImageRequestTimeoutSec}s");
         ImGui.Separator();
 
         ImGui.TextUnformatted("Prompt");
@@ -74,19 +75,25 @@ public sealed class ImageWindow : Window
         ImGui.SameLine(); ImGui.SliderFloat("CFG", ref _cfg, 1.0f, 15.0f, "%.1f");
         ImGui.InputInt("Seed (-1 random)", ref _seed);
         ImGui.InputText("Sampler", ref _sampler, 64);
-        ImGui.TextDisabled("Common samplers: Euler a, Euler, DPM++ 2M Karras, etc.");
+        ImGui.TextDisabled("Tip: 512×512, 20–28 steps are fast. Large sizes or Hires fix will take much longer.");
 
         ImGui.Separator();
 
-        if (ImGui.Button(_busy ? "Working…" : "Generate", new Vector2(120, 28)) && !_busy)
+        if (!_busy)
         {
-            _ = GenerateAsync();
+            if (ImGui.Button("Generate", new Vector2(120, 28)))
+                _ = GenerateAsync();
         }
+        else
+        {
+            if (ImGui.Button("Cancel", new Vector2(120, 28)))
+                _cts?.Cancel();
+        }
+
         ImGui.SameLine();
         if (ImGui.Button("Open Folder", new Vector2(120, 28)))
-        {
             TryOpenFolder();
-        }
+
         ImGui.SameLine();
         if (!string.IsNullOrEmpty(_status))
         {
@@ -99,9 +106,7 @@ public sealed class ImageWindow : Window
         ImGui.Separator();
         ImGui.TextUnformatted("Recent Outputs");
         if (_outputs.Count == 0)
-        {
             ImGui.TextDisabled("(none yet)");
-        }
         else
         {
             foreach (var file in _outputs)
@@ -122,6 +127,13 @@ public sealed class ImageWindow : Window
         if (string.IsNullOrWhiteSpace(_prompt))
         {
             _status = "ERR: Prompt is empty.";
+            return;
+        }
+
+        // Quick guard against accidental huge requests
+        if ((_w * _h) > (1024 * 1024) && _steps > 40)
+        {
+            _status = "ERR: Very large request. Try smaller size or fewer steps first.";
             return;
         }
 
@@ -151,6 +163,10 @@ public sealed class ImageWindow : Window
                 _status = $"OK: Saved {list.Count} image(s).";
             }
         }
+        catch (OperationCanceledException)
+        {
+            _status = "ERR: Generation cancelled (timeout or user cancel).";
+        }
         catch (Exception ex)
         {
             _status = $"ERR: {ex.Message}";
@@ -163,10 +179,12 @@ public sealed class ImageWindow : Window
 
     private void TryOpenFolder()
     {
-        // Let Windows/macOS/Linux open a folder
         try
         {
-            var dir = GetSaveDir();
+            var dir = string.IsNullOrWhiteSpace(_config.ImageSaveDir)
+                ? NunuTheAICompanion.PluginMain.PluginInterface.GetPluginConfigDirectory() + "/Images"
+                : _config.ImageSaveDir;
+
             if (!System.IO.Directory.Exists(dir)) return;
             Process.Start(new ProcessStartInfo { FileName = dir, UseShellExecute = true });
         }
@@ -181,12 +199,5 @@ public sealed class ImageWindow : Window
             Process.Start(new ProcessStartInfo { FileName = file, UseShellExecute = true });
         }
         catch { }
-    }
-
-    private string GetSaveDir()
-    {
-        return string.IsNullOrWhiteSpace(_config.ImageSaveDir)
-            ? NunuTheAICompanion.PluginMain.PluginInterface.GetPluginConfigDirectory() + "/Images"
-            : _config.ImageSaveDir;
     }
 }
