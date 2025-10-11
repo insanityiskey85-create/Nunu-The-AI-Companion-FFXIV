@@ -4,6 +4,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AssemblyName>Nunu The AI Companion</AssemblyName>
+	  <AssemblyVersion>1.0.1.8</AssemblyVersion>
   </PropertyGroup>
   <ItemGroup>
     <Compile Remove="api.cs" />
