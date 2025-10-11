@@ -4,13 +4,10 @@ using System.Text;
 using System.Threading;
 using Dalamud.Game.Command;
 using Dalamud.Plugin.Services;
+using NunuTheAICompanion.Interop;
 
 namespace NunuTheAICompanion.Services;
 
-/// <summary>
-/// Safely posts Little Nunu's messages into in-game channels (/say, /p, /fc, etc.)
-/// Uses CommandManager.ProcessCommand on the Framework thread, with queueing and rate limits.
-/// </summary>
 public sealed class ChatBroadcaster : IDisposable
 {
     private readonly IPluginLog _log;
@@ -22,7 +19,10 @@ public sealed class ChatBroadcaster : IDisposable
     private readonly Thread _worker;
     private volatile bool _running = true;
 
-    // Rate limit: N messages per minute (sliding window)
+    private IpcChatRelay? _ipc;
+    private bool _preferIpc = false;
+    private Func<string, bool>? _nativeSend;
+
     private int _sentThisMinute = 0;
     private DateTime _windowStart = DateTime.UtcNow;
 
@@ -36,33 +36,28 @@ public sealed class ChatBroadcaster : IDisposable
         _worker.Start();
     }
 
-    public void Dispose()
-    {
-        try
-        {
-            _running = false;
-            _wake.Set();
-        }
-        catch { }
-    }
+    public void Dispose() { try { _running = false; _wake.Set(); } catch { } }
 
-    public enum NunuChannel
-    {
-        Say,
-        Party,
-        FreeCompany,
-        Shout,
-        Yell,
-        Echo,          // local-only visibility for sanity checks
-        // Tell (needs target) – add overload if you want it
-    }
+    public enum NunuChannel { Say, Party, FreeCompany, Shout, Yell, Echo }
 
-    public bool Enabled { get; set; } = false;   // master toggle
-    public int MaxPerMinute { get; set; } = 6;   // conservative default
+    public bool Enabled { get; set; } = false;
+    public int MaxPerMinute { get; set; } = 6;
     public int DelayBetweenLinesMs { get; set; } = 1500;
-    public int MaxChunkLen { get; set; } = 430;  // leave room for prefix
+    public int MaxChunkLen { get; set; } = 430;
 
-    /// <summary>Enqueue a message for a channel. Decoupled from any listening flags.</summary>
+    public void SetIpcRelay(IpcChatRelay? relay, bool preferIpc)
+    {
+        _ipc = relay;
+        _preferIpc = preferIpc;
+        _log.Information("[Broadcaster] IPC relay set. PreferIpc={Prefer}", _preferIpc);
+    }
+
+    public void SetNativeSender(Func<string, bool>? nativeSend)
+    {
+        _nativeSend = nativeSend;
+        _log.Information("[Broadcaster] Native sender {State}", nativeSend is null ? "DISABLED" : "ENABLED");
+    }
+
     public void Enqueue(NunuChannel ch, string text)
     {
         if (!Enabled) { _log.Information("[Broadcaster] Ignored enqueue (disabled)."); return; }
@@ -73,7 +68,6 @@ public sealed class ChatBroadcaster : IDisposable
             _queue.Enqueue((ch, part));
             _log.Information("[Broadcaster] queued \"{Channel}\": \"{Part}\"", ch, part);
         }
-
         _wake.Set();
     }
 
@@ -86,7 +80,6 @@ public sealed class ChatBroadcaster : IDisposable
             {
                 while (_queue.TryDequeue(out var item))
                 {
-                    // Sliding window rate limit
                     ResetWindowIfNeeded();
                     if (_sentThisMinute >= Math.Max(1, MaxPerMinute))
                     {
@@ -100,19 +93,27 @@ public sealed class ChatBroadcaster : IDisposable
                     var line = $"{prefix} {item.text}".TrimEnd();
                     _log.Information("[Broadcaster] sending: {Line}", line);
 
-                    // IMPORTANT: send on Framework thread
+                    bool delivered = false;
                     try
                     {
-                        _framework.RunOnFrameworkThread(() =>
+                        if (_nativeSend is not null) delivered = _nativeSend(line);
+                        if (!delivered && _preferIpc && _ipc is not null) delivered = _ipc.TrySend(line);
+
+                        if (!delivered)
                         {
-                            try { _cmd.ProcessCommand(line); }
-                            catch (Exception ex) { _log.Error(ex, "[Broadcaster] ProcessCommand failed for: {Line}", line); }
-                        });
-                        _sentThisMinute++;
+                            _framework.RunOnFrameworkThread(() =>
+                            {
+                                try { _cmd.ProcessCommand(line); }
+                                catch (Exception ex) { _log.Error(ex, "[Broadcaster] ProcessCommand failed for: {Line}", line); }
+                            });
+                            delivered = true;
+                        }
+
+                        if (delivered) _sentThisMinute++;
                     }
                     catch (Exception ex)
                     {
-                        _log.Error(ex, "[Broadcaster] scheduling command failed");
+                        _log.Error(ex, "[Broadcaster] scheduling/native/ipc send failed");
                     }
 
                     Thread.Sleep(Math.Max(250, DelayBetweenLinesMs));
@@ -132,11 +133,7 @@ public sealed class ChatBroadcaster : IDisposable
     private void ResetWindowIfNeeded()
     {
         var now = DateTime.UtcNow;
-        if ((now - _windowStart).TotalSeconds >= 60)
-        {
-            _windowStart = now;
-            _sentThisMinute = 0;
-        }
+        if ((now - _windowStart).TotalSeconds >= 60) { _windowStart = now; _sentThisMinute = 0; }
     }
 
     private static string ChannelPrefix(NunuChannel ch) => ch switch
@@ -154,10 +151,7 @@ public sealed class ChatBroadcaster : IDisposable
     {
         var list = new System.Collections.Generic.List<string>();
         var sb = new StringBuilder(maxLen);
-
-        // Normalize newlines to spaces (commands ignore hard newlines)
         s = s.Replace("\r\n", " ").Replace('\n', ' ');
-
         foreach (var word in s.Split(' ', StringSplitOptions.RemoveEmptyEntries))
         {
             if (sb.Length + word.Length + 1 > maxLen)

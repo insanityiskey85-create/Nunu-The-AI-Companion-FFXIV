@@ -1,4 +1,7 @@
-﻿using System.Net.Http;
+﻿using Nunu_The_AI_Companion;
+using System.Collections.Generic;
+using System.Net.Http;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -8,197 +11,114 @@ namespace NunuTheAICompanion.Services;
 public sealed class OllamaClient
 {
     private readonly HttpClient _http;
-    private readonly Configuration _config;
+    private readonly Configuration _cfg;
 
-    public OllamaClient(HttpClient http, Configuration config)
+    public OllamaClient(HttpClient http, Configuration cfg)
     {
         _http = http;
-        _http.Timeout = TimeSpan.FromSeconds(120);
-        _config = config;
+        _cfg = cfg;
     }
 
+    /// <summary>
+    /// Minimal, safe streaming reader with ZERO catch blocks (so we can yield legally).
+    /// We do not parse JSON to avoid parse exceptions; we just emit text lines as they arrive.
+    /// Caller (PluginMain.StreamAssistantAsync) already has try/catch to surface errors.
+    /// </summary>
     public async IAsyncEnumerable<string> StreamChatAsync(
-        string backendUrl,
-        List<(string role, string content)> messages,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        string url,
+        List<(string role, string content)> history,
+        [EnumeratorCancellation] CancellationToken token)
     {
-        var mode = (_config.BackendMode ?? "jsonl").ToLowerInvariant();
-
-        if (mode == "jsonl")
+        // Build request payload
+        var payload = new
         {
-            await foreach (var chunk in StreamJsonlAsync(backendUrl, messages, ct))
-                yield return chunk;
-        }
-        else if (mode == "sse")
-        {
-            await foreach (var chunk in StreamSseAsync(backendUrl, messages, ct))
-                yield return chunk;
-        }
-        else // "plaintext"
-        {
-            await foreach (var chunk in StreamPlainTextAsync(backendUrl, messages, ct))
-                yield return chunk;
-        }
-    }
-
-    // ---- Direct Ollama JSONL (/api/chat) ----
-    private async IAsyncEnumerable<string> StreamJsonlAsync(
-        string backendUrl,
-        List<(string role, string content)> messages,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
-    {
-        var msgList = new List<object>();
-        if (!string.IsNullOrWhiteSpace(_config.SystemPrompt))
-            msgList.Add(new { role = "system", content = _config.SystemPrompt });
-
-        foreach (var (role, content) in messages)
-            msgList.Add(new { role, content });
-
-        var bodyObj = new
-        {
-            model = _config.ModelName,
+            model = _cfg.ModelName,
             stream = true,
-            options = new { temperature = _config.Temperature },
-            messages = msgList
+            temperature = _cfg.Temperature,
+            messages = history.ConvertAll(m => new { role = m.role, content = m.content }),
+            system = _cfg.SystemPrompt
         };
-        var body = JsonSerializer.Serialize(bodyObj);
 
-        using var req = new HttpRequestMessage(HttpMethod.Post, backendUrl)
+        using var req = new HttpRequestMessage(HttpMethod.Post, url)
         {
-            Content = new StringContent(body, Encoding.UTF8, "application/json")
+            Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json")
         };
-        using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
-        resp.EnsureSuccessStatusCode();
 
-        await using var stream = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
-        var sb = new StringBuilder(8192);
+        using var res = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
+        res.EnsureSuccessStatusCode();
+
+        using var s = await res.Content.ReadAsStreamAsync(token).ConfigureAwait(false);
+
         var buf = new byte[4096];
+        var sb = new StringBuilder();
 
-        while (true)
+        while (!token.IsCancellationRequested)
         {
-            var read = await stream.ReadAsync(buf.AsMemory(0, buf.Length), ct).ConfigureAwait(false);
-            if (read <= 0) break;
+            var n = await s.ReadAsync(buf, 0, buf.Length, token).ConfigureAwait(false);
+            if (n <= 0) break;
 
-            sb.Append(Encoding.UTF8.GetString(buf, 0, read));
+            sb.Append(Encoding.UTF8.GetString(buf, 0, n));
 
-            var text = sb.ToString();
-            int lineStart = 0;
+            // emit complete lines
             while (true)
             {
-                int nl = text.IndexOf('\n', lineStart);
+                var all = sb.ToString();
+                var nl = all.IndexOf('\n');
                 if (nl < 0) break;
-                var line = text.AsSpan(lineStart, nl - lineStart).Trim().ToString();
-                lineStart = nl + 1;
+
+                var line = all[..nl].Trim();
+                sb.Remove(0, nl + 1);
 
                 if (line.Length == 0) continue;
 
-                // Extract content safely (no yield inside try/catch)
-                var (hasContent, content, done) = TryExtractOllamaContent(line);
-                if (hasContent && !string.IsNullOrEmpty(content))
-                    yield return content;
+                // If the backend uses SSE like "data: {...}" strip the prefix.
+                const string dataPrefix = "data:";
+                if (line.StartsWith(dataPrefix))
+                    line = line[dataPrefix.Length..].Trim();
 
-                if (done) yield break;
+                // If it's a simple JSON object with "response"/"message.content", we *attempt*
+                // a safe extraction WITHOUT try/catch by doing cheap checks; otherwise emit raw.
+                if (line.Length > 0 && line[0] == '{' && line[^1] == '}')
+                {
+                    // Heuristic extraction without throwing: look for quoted field names.
+                    // If not found, just emit the raw line.
+                    // (We avoid JsonDocument.Parse to keep this try/catch-free.)
+                    var lower = line.ToLowerInvariant();
+                    var kMsg = "\"message\"";
+                    var kCont = "\"content\"";
+                    var kResp = "\"response\"";
+
+                    if (lower.Contains(kResp))
+                    {
+                        // Very loose extraction: "response":"...".
+                        var idx = lower.IndexOf(kResp);
+                        var colon = line.IndexOf(':', idx);
+                        if (colon > 0)
+                        {
+                            var val = line[(colon + 1)..].Trim().TrimStart('"');
+                            var end = val.LastIndexOf('"');
+                            if (end > 0) val = val[..end];
+                            if (!string.IsNullOrEmpty(val)) { yield return val; continue; }
+                        }
+                    }
+                    else if (lower.Contains(kMsg) && lower.Contains(kCont))
+                    {
+                        // Loose extraction for message.content
+                        var contIdx = lower.IndexOf(kCont);
+                        var colon = line.IndexOf(':', contIdx);
+                        if (colon > 0)
+                        {
+                            var val = line[(colon + 1)..].Trim().TrimStart('"');
+                            var end = val.LastIndexOf('"');
+                            if (end > 0) val = val[..end];
+                            if (!string.IsNullOrEmpty(val)) { yield return val; continue; }
+                        }
+                    }
+                }
+
+                // Fallback: emit raw line/chunk
+                yield return line;
             }
-
-            if (lineStart > 0)
-                sb.Remove(0, lineStart);
-        }
-    }
-
-    // Helper avoids yielding inside try/catch (fixes CS1626)
-    private static (bool hasContent, string? content, bool done) TryExtractOllamaContent(string line)
-    {
-        try
-        {
-            using var doc = JsonDocument.Parse(line);
-            var root = doc.RootElement;
-
-            string? content = null;
-            if (root.TryGetProperty("message", out var msgEl) &&
-                msgEl.TryGetProperty("content", out var contentEl))
-            {
-                content = contentEl.GetString();
-            }
-
-            bool done = root.TryGetProperty("done", out var doneEl) && doneEl.ValueKind == JsonValueKind.True;
-            return (content is not null, content, done);
-        }
-        catch
-        {
-            // Malformed/partial line; ignore
-            return (false, null, false);
-        }
-    }
-
-    // ---- SSE proxy (text/event-stream) ----
-    private async IAsyncEnumerable<string> StreamSseAsync(
-        string backendUrl,
-        List<(string role, string content)> messages,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
-    {
-        var body = JsonSerializer.Serialize(new
-        {
-            messages = messages.Select(m => new { role = m.role, content = m.content }).ToArray(),
-            system = _config.SystemPrompt,
-            temperature = _config.Temperature,
-            model = _config.ModelName
-        });
-
-        using var req = new HttpRequestMessage(HttpMethod.Post, backendUrl)
-        {
-            Headers = { { "Accept", "text/event-stream" } },
-            Content = new StringContent(body, Encoding.UTF8, "application/json")
-        };
-        using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
-        resp.EnsureSuccessStatusCode();
-
-        await using var stream = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
-        using var reader = new StreamReader(stream, Encoding.UTF8);
-
-        while (!reader.EndOfStream && !ct.IsCancellationRequested)
-        {
-            var line = await reader.ReadLineAsync().ConfigureAwait(false);
-            if (line is null) break;
-
-            if (line.StartsWith("data:"))
-            {
-                var data = line.Substring(5).TrimStart();
-                if (data == "[DONE]") yield break;
-                if (!string.IsNullOrEmpty(data)) yield return data;
-            }
-        }
-    }
-
-    // ---- Plain text proxy (bytes) ----
-    private async IAsyncEnumerable<string> StreamPlainTextAsync(
-        string backendUrl,
-        List<(string role, string content)> messages,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
-    {
-        var body = JsonSerializer.Serialize(new
-        {
-            messages = messages.Select(m => new { role = m.role, content = m.content }).ToArray(),
-            system = _config.SystemPrompt,
-            temperature = _config.Temperature,
-            model = _config.ModelName
-        });
-
-        using var req = new HttpRequestMessage(HttpMethod.Post, backendUrl)
-        {
-            Content = new StringContent(body, Encoding.UTF8, "application/json")
-        };
-        using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
-        resp.EnsureSuccessStatusCode();
-
-        await using var stream = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
-        var buf = new byte[4096];
-
-        while (!ct.IsCancellationRequested)
-        {
-            var read = await stream.ReadAsync(buf.AsMemory(0, buf.Length), ct).ConfigureAwait(false);
-            if (read <= 0) break;
-            var chunk = Encoding.UTF8.GetString(buf, 0, read);
-            if (!string.IsNullOrEmpty(chunk)) yield return chunk;
         }
     }
 }

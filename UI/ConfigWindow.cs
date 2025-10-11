@@ -12,7 +12,7 @@ using ImGui = Dalamud.Bindings.ImGui.ImGui;
 using ImGuiCol = Dalamud.Bindings.ImGui.ImGuiCol;
 using ImGuiWindowFlags = Dalamud.Bindings.ImGui.ImGuiWindowFlags;
 
-namespace NunuTheAICompanion.UI;
+namespace Nunu_The_AI_Companion.UI;
 
 public sealed class ConfigWindow : Window
 {

@@ -10,7 +10,7 @@ using ImGuiStyleVar = Dalamud.Bindings.ImGui.ImGuiStyleVar;
 using ImGuiWindowFlags = Dalamud.Bindings.ImGui.ImGuiWindowFlags;
 using ImGuiCond = Dalamud.Bindings.ImGui.ImGuiCond;
 
-namespace NunuTheAICompanion.UI;
+namespace Nunu_The_AI_Companion.UI;
 
 /// <summary>
 /// Two-pane chat:

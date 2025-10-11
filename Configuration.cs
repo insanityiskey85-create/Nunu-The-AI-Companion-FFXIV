@@ -2,16 +2,16 @@
 using Dalamud.Configuration;
 using Dalamud.Plugin;
 
-namespace NunuTheAICompanion;
+namespace Nunu_The_AI_Companion;
 
 public sealed class Configuration : IPluginConfiguration
 {
-    // bump whenever we add/remove fields
-    public int Version { get; set; } = 12;
+    // bump when fields change
+    public int Version { get; set; } = 13;
 
     // ===== Chat backend =====
     public string BackendUrl { get; set; } = "http://localhost:11434/api/chat";
-    public string BackendMode { get; set; } = "jsonl";              // "jsonl" | "sse" | "plaintext"
+    public string BackendMode { get; set; } = "jsonl";           // "jsonl" | "sse" | "plaintext"
     public string ModelName { get; set; } = "nunu-8b";
     public float Temperature { get; set; } = 0.7f;
     public string? SystemPrompt { get; set; } =
@@ -34,7 +34,7 @@ public sealed class Configuration : IPluginConfiguration
     public string Callsign { get; set; } = "@nunu";
     public List<string> Whitelist { get; set; } = new();
 
-    // Channels
+    // Channels (what we LISTEN to)
     public bool ListenSay { get; set; } = true;
     public bool ListenTell { get; set; } = true;
     public bool ListenParty { get; set; } = true;
@@ -43,7 +43,7 @@ public sealed class Configuration : IPluginConfiguration
     public bool ListenShout { get; set; } = false;
     public bool ListenYell { get; set; } = false;
 
-    // React to messages authored by "You"
+    // React to "You"
     public bool ListenSelf { get; set; } = true;
 
     // ===== Diagnostics =====
@@ -64,11 +64,15 @@ public sealed class Configuration : IPluginConfiguration
     public int ImageRequestTimeoutSec { get; set; } = 600;
 
     // ===== Internet Search =====
-    public bool AllowInternet { get; set; } = false;         // master switch
-    public string SearchBackend { get; set; } = "serpapi";   // "serpapi" | "bing"
-    public string SearchApiKey { get; set; } = "";           // stored locally
-    public int SearchMaxResults { get; set; } = 3;           // 1..5 sane
-    public int SearchTimeoutSec { get; set; } = 20;          // per-request
+    public bool AllowInternet { get; set; } = false;
+    public string SearchBackend { get; set; } = "serpapi"; // "serpapi" | "bing"
+    public string SearchApiKey { get; set; } = "";
+    public int SearchMaxResults { get; set; } = 3;
+    public int SearchTimeoutSec { get; set; } = 20;
+
+    // ===== IPC chat relay (post as the player via another plugin) =====
+    public string IpcChannelName { get; set; } = "";  // e.g., "MidiBard.Chat.Send"
+    public bool PreferIpcRelay { get; set; } = true;  // IPC first, then ProcessCommand fallback
 
     [System.NonSerialized] private IDalamudPluginInterface? _pi;
     public void Initialize(IDalamudPluginInterface pi) => _pi = pi;

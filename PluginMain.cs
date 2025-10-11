@@ -11,8 +11,12 @@ using Dalamud.Plugin;
 using Dalamud.IoC;
 using Dalamud.Plugin.Services;
 using NunuTheAICompanion.Services;
+using NunuTheAICompanion.Interop;
+using NunuTheAICompanion.UI;
+using Nunu_The_AI_Companion.UI;
+using Nunu_The_AI_Companion.Services;
 
-namespace NunuTheAICompanion;
+namespace Nunu_The_AI_Companion;
 
 public sealed class PluginMain : IDalamudPlugin
 {
@@ -27,10 +31,10 @@ public sealed class PluginMain : IDalamudPlugin
     internal Configuration Config { get; private set; } = null!;
     internal WindowSystem WindowSystem { get; } = new("NunuTheAICompanion");
 
-    internal UI.ChatWindow ChatWindow { get; private set; } = null!;
-    internal UI.ConfigWindow ConfigWindow { get; private set; } = null!;
-    internal UI.MemoryWindow? MemoryWindow { get; private set; }
-    internal UI.ImageWindow? ImageWindow { get; private set; }
+    internal ChatWindow ChatWindow { get; private set; } = null!;
+    internal ConfigWindow ConfigWindow { get; private set; } = null!;
+    internal MemoryWindow? MemoryWindow { get; private set; }
+    internal ImageWindow? ImageWindow { get; private set; }
     internal MemoryService? Memory { get; private set; }
 
     private readonly List<(string role, string content)> _history = new();
@@ -38,11 +42,11 @@ public sealed class PluginMain : IDalamudPlugin
     private OllamaClient _client = null!;
     private WebSearchClient _search = null!;
     private ChatBroadcaster? _broadcaster;
+    private IpcChatRelay? _ipcRelay;
     private ChatBroadcaster.NunuChannel _echoChannel = ChatBroadcaster.NunuChannel.Party;
 
     private CancellationTokenSource? _cts;
     private bool _isStreaming;
-
     private ChatListener? _listener;
 
     private const string Command = "/nunu";
@@ -50,16 +54,21 @@ public sealed class PluginMain : IDalamudPlugin
     private const string DebugCommand = "/nunudebug";
     private const string ImgCommand = "/nunuimg";
     private const string SearchCommand = "/nunusearch";
-    private const string SpeakCommand = "/nunuspeak";   // on|off
-    private const string ChanCommand = "/nunuchan";    // say|party|fc|shout|yell
-    private const string SendCommand = "/nunusend";    // /nunusend say hello
-    private const string RawCommand = "/nunucmd";     // /nunucmd /say raw line
+    private const string SpeakCommand = "/nunuspeak";
+    private const string ChanCommand = "/nunuchan";
+    private const string SendCommand = "/nunusend";
+    private const string RawCommand = "/nunucmd";
+    private const string IpcBindCommand = "/nunuipcbind";
+    private const string IpcPrefCommand = "/nunuipcmode";
 
     public PluginMain()
     {
         // Config
         Config = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
         Config.Initialize(PluginInterface);
+
+        // Optional native chat via reflection (MidiBard)
+        NativeChatSender.Initialize(this, PluginInterface, Log);
 
         // Services
         _client = new OllamaClient(_http, Config);
@@ -70,28 +79,28 @@ public sealed class PluginMain : IDalamudPlugin
         Memory = new MemoryService(cfgDir, Config.MemoryMaxEntries, Config.MemoryEnabled);
 
         // Windows
-        ChatWindow = new UI.ChatWindow(Config) { Size = new Vector2(740, 480) };
+        ChatWindow = new ChatWindow(Config) { Size = new Vector2(740, 480) };
         ChatWindow.OnSend += HandleUserSend;
         WindowSystem.AddWindow(ChatWindow);
 
-        ConfigWindow = new UI.ConfigWindow(Config);
+        ConfigWindow = new ConfigWindow(Config);
         WindowSystem.AddWindow(ConfigWindow);
 
         try
         {
-            MemoryWindow = new UI.MemoryWindow(Config, Memory);
-            WindowSystem.AddWindow(MemoryWindow);
+            MemoryWindow = new MemoryWindow(Config, Memory, Log);
+            if (MemoryWindow is not null) WindowSystem.AddWindow(MemoryWindow);
         }
-        catch { /* optional window not present in all forks */ }
+        catch { }
 
         try
         {
-            var imageSaveBase = System.IO.Path.Combine(cfgDir, "Images");
+            var imageSaveBase = Path.Combine(cfgDir, "Images");
             var imageClient = new ImageClient(_http, Config, imageSaveBase);
-            ImageWindow = new UI.ImageWindow(Config, imageClient);
-            WindowSystem.AddWindow(ImageWindow);
+            ImageWindow = new ImageWindow(Config, imageClient, Log);
+            if (ImageWindow is not null) WindowSystem.AddWindow(ImageWindow);
         }
-        catch { /* optional window not present in all forks */ }
+        catch { }
 
         // Greeting
         const string hello = "WAH! Little Nunu listens by the campfire. Call me with @nunu; I answer here, not in game chat.";
@@ -99,7 +108,7 @@ public sealed class PluginMain : IDalamudPlugin
         _history.Add(("assistant", hello));
         Memory?.Append("assistant", hello, topic: "greeting");
 
-        // Chat listener
+        // Listener scaffold
         _listener = new ChatListener(
             ChatGui,
             Log,
@@ -107,13 +116,25 @@ public sealed class PluginMain : IDalamudPlugin
             OnEligibleChatHeard,
             mirrorDebugToWindow: s => { if (Config.DebugMirrorToWindow) ChatWindow.AppendAssistant(s); });
 
-        // Broadcaster via CommandManager + Framework
+        // Broadcaster
         _broadcaster = new ChatBroadcaster(CommandManager, Framework, Log)
         {
-            Enabled = false,                 // OFF by default; enable with /nunuspeak on
+            Enabled = false,
             MaxPerMinute = 6,
             DelayBetweenLinesMs = 1500
         };
+        _broadcaster.SetNativeSender(fullLine => NativeChatSender.TrySendFull(fullLine));
+
+        // IPC relay (optional)
+        _ipcRelay = new IpcChatRelay(PluginInterface, Log);
+        if (!string.IsNullOrWhiteSpace(Config.IpcChannelName))
+        {
+            var ok = _ipcRelay.Bind(Config.IpcChannelName);
+            ChatWindow.AppendAssistant(ok
+                ? $"[ipc] bound to '{Config.IpcChannelName}'."
+                : $"[ipc] failed to bind '{Config.IpcChannelName}'.");
+        }
+        _broadcaster.SetIpcRelay(_ipcRelay, Config.PreferIpcRelay);
 
         // Commands
         CommandManager.AddHandler(Command, new CommandInfo(OnCommand) { HelpMessage = "Toggle Nunu. '/nunu config' settings. '/nunu memory' memories." });
@@ -123,20 +144,26 @@ public sealed class PluginMain : IDalamudPlugin
         CommandManager.AddHandler(SearchCommand, new CommandInfo(OnSearchCommand) { HelpMessage = "Search the web: /nunusearch <query>" });
         CommandManager.AddHandler(SpeakCommand, new CommandInfo(OnSpeakCommand) { HelpMessage = "Broadcast replies to game chat: /nunuspeak on|off" });
         CommandManager.AddHandler(ChanCommand, new CommandInfo(OnChanCommand) { HelpMessage = "Set broadcast channel: /nunuchan say|party|fc|shout|yell" });
-        CommandManager.AddHandler(SendCommand, new CommandInfo(OnSendCommand) { HelpMessage = "Force-send: /nunusend <say|party|fc|shout|yell> <text>" });
+        CommandManager.AddHandler(SendCommand, new CommandInfo(OnSendCommand) { HelpMessage = "Force-send: /nunusend <say|party|fc|shout|yell|echo> <text>" });
         CommandManager.AddHandler(RawCommand, new CommandInfo(OnRawCommand) { HelpMessage = "Send a raw game command: /nunucmd <text>" });
+        CommandManager.AddHandler(IpcBindCommand, new CommandInfo(OnIpcBind) { HelpMessage = "Bind an IPC sender: /nunuipcbind <channelName>" });
+        CommandManager.AddHandler(IpcPrefCommand, new CommandInfo(OnIpcPref) { HelpMessage = "Prefer IPC over ProcessCommand: /nunuipcmode on|off" });
 
         // UI hooks
         PluginInterface.UiBuilder.Draw += DrawUI;
         PluginInterface.UiBuilder.OpenConfigUi += () => ConfigWindow.IsOpen = true;
         PluginInterface.UiBuilder.OpenMainUi += () => ChatWindow.IsOpen = true;
 
-        Log.Information("[Nunu] Plugin initialized.");
+        Log.Information("[Nunu] Plugin initialized. NativeChat available={Avail}", NativeChatSender.IsAvailable);
     }
 
     private void OnImgCommand(string command, string args)
     {
-        if (ImageWindow is null) { ChatGui.PrintError("Image window not available in this build."); return; }
+        if (ImageWindow is null)
+        {
+            ChatGui.PrintError("Image window not available in this build.");
+            return;
+        }
         ImageWindow.IsOpen = !ImageWindow.IsOpen;
     }
 
@@ -151,7 +178,7 @@ public sealed class PluginMain : IDalamudPlugin
 
         try
         {
-            var cts = new CancellationTokenSource(TimeSpan.FromSeconds(Math.Clamp(Config.SearchTimeoutSec, 5, 60)));
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(Math.Clamp(Config.SearchTimeoutSec, 5, 60)));
             var hits = await _search.SearchAsync(q, cts.Token);
             if (hits.Count == 0)
             {
@@ -228,7 +255,7 @@ public sealed class PluginMain : IDalamudPlugin
 
         var chan = a[..sp].ToLowerInvariant();
         var text = a[(sp + 1)..].Trim();
-        ChatBroadcaster.NunuChannel c = chan switch
+        var c = chan switch
         {
             "say" => ChatBroadcaster.NunuChannel.Say,
             "party" or "p" => ChatBroadcaster.NunuChannel.Party,
@@ -267,6 +294,35 @@ public sealed class PluginMain : IDalamudPlugin
         }
     }
 
+    private void OnIpcBind(string cmd, string args)
+    {
+        var name = (args ?? "").Trim();
+        if (_ipcRelay is null || string.IsNullOrEmpty(name))
+        {
+            ChatWindow.AppendAssistant("Usage: /nunuipcbind <channelName>");
+            return;
+        }
+        var ok = _ipcRelay.Bind(name);
+        Config.IpcChannelName = name; Config.Save();
+        _broadcaster?.SetIpcRelay(_ipcRelay, Config.PreferIpcRelay);
+        ChatWindow.AppendAssistant(ok ? $"[ipc] bound to '{name}'" : $"[ipc] failed to bind '{name}'");
+    }
+
+    private void OnIpcPref(string cmd, string args)
+    {
+        var a = (args ?? "").Trim().ToLowerInvariant();
+        bool on = a is "on" or "1" or "true";
+        bool off = a is "off" or "0" or "false";
+        if (!on && !off)
+        {
+            ChatWindow.AppendAssistant($"[ipc] PreferIpcRelay={(Config.PreferIpcRelay ? "ON" : "OFF")}. Usage: /nunuipcmode on|off");
+            return;
+        }
+        Config.PreferIpcRelay = on; Config.Save();
+        _broadcaster?.SetIpcRelay(_ipcRelay, Config.PreferIpcRelay);
+        ChatWindow.AppendAssistant($"[ipc] PreferIpcRelay {(on ? "ON" : "OFF")}");
+    }
+
     private void OnEligibleChatHeard(string author, string text)
     {
         ChatWindow.AppendAssistant($"“{text}” you say, {author}? Very well…");
@@ -286,9 +342,9 @@ public sealed class PluginMain : IDalamudPlugin
     {
         var s = $"[diag] ListenEnabled={Config.ListenEnabled}, RequireCallsign={Config.RequireCallsign}, ListenSelf={Config.ListenSelf}, Callsign='{Config.Callsign}', " +
                 $"Say={Config.ListenSay}, Tell={Config.ListenTell}, Party={Config.ListenParty}, Alliance={Config.ListenAlliance}, FC={Config.ListenFreeCompany}, " +
-                $"Shout={Config.ListenShout}, Yell={Config.ListenYell}, WhitelistCount={(Config.Whitelist?.Count ?? 0)}, DebugListen={Config.DebugListen}, Mirror={Config.DebugMirrorToWindow}, " +
+                $"Shout={Config.ListenShout}, Yell={Config.ListenYell}, WhitelistCount={Config.Whitelist?.Count ?? 0}, DebugListen={Config.DebugListen}, Mirror={Config.DebugMirrorToWindow}, " +
                 $"AllowInternet={Config.AllowInternet}, SearchBackend={Config.SearchBackend}, MaxRes={Config.SearchMaxResults}, " +
-                $"SpeakEnabled={_broadcaster?.Enabled}, EchoChannel={_echoChannel}";
+                $"SpeakEnabled={_broadcaster?.Enabled}, EchoChannel={_echoChannel}, IpcChannel='{Config.IpcChannelName}', PreferIpc={Config.PreferIpcRelay}, NativeAvail={NativeChatSender.IsAvailable}";
         Log.Information(s);
         ChatWindow.AppendAssistant(s);
         ChatGui.Print("Nunu diag printed in window.");
@@ -328,6 +384,7 @@ public sealed class PluginMain : IDalamudPlugin
         _cts?.Cancel();
         _listener?.Dispose();
         _broadcaster?.Dispose();
+        _ipcRelay?.Dispose();
         WindowSystem.RemoveAllWindows();
         CommandManager.RemoveHandler(Command);
         CommandManager.RemoveHandler(DiagCommand);
@@ -338,6 +395,8 @@ public sealed class PluginMain : IDalamudPlugin
         CommandManager.RemoveHandler(ChanCommand);
         CommandManager.RemoveHandler(SendCommand);
         CommandManager.RemoveHandler(RawCommand);
+        CommandManager.RemoveHandler(IpcBindCommand);
+        CommandManager.RemoveHandler(IpcPrefCommand);
         _http.Dispose();
         Log.Information("[Nunu] Plugin disposed.");
     }
@@ -368,7 +427,6 @@ public sealed class PluginMain : IDalamudPlugin
             {
                 if (string.IsNullOrEmpty(delta)) continue;
 
-                // Work on a mutable copy (foreach variable is readonly)
                 var chunk = delta;
 
                 // Simple tool-call trigger <<search: ...>>
@@ -382,7 +440,7 @@ public sealed class PluginMain : IDalamudPlugin
                         ChatWindow.AppendAssistantDelta("\n[searching…]\n");
                         try
                         {
-                            var cts = new CancellationTokenSource(TimeSpan.FromSeconds(Math.Clamp(Config.SearchTimeoutSec, 5, 60)));
+                            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(Math.Clamp(Config.SearchTimeoutSec, 5, 60)));
                             var hits = await _search.SearchAsync(q, cts.Token);
                             var brief = WebSearchClient.FormatForContext(hits);
                             _history.Add(("tool:web.search", brief));
@@ -392,8 +450,7 @@ public sealed class PluginMain : IDalamudPlugin
                         {
                             ChatWindow.AppendAssistantDelta($"\n[search error] {ex.Message}\n");
                         }
-                        // Strip the token from the output chunk
-                        chunk = chunk.Remove(markerStart, (markerEnd + 2) - markerStart);
+                        chunk = chunk.Remove(markerStart, markerEnd + 2 - markerStart);
                     }
                 }
 
@@ -418,12 +475,9 @@ public sealed class PluginMain : IDalamudPlugin
                 if (Memory?.Enabled == true)
                     Memory.Append("assistant", reply, topic: "chat");
 
-                // If broadcasting is enabled, echo final reply to the chosen channel
                 if (_broadcaster?.Enabled == true)
                 {
                     _broadcaster.Enqueue(_echoChannel, reply);
-                    // optional: also confirm locally so you see it's attempted even if channel is blocked
-                    // _broadcaster.Enqueue(ChatBroadcaster.NunuChannel.Echo, "(Nunu tried to speak in the selected channel)");
                 }
             }
         }
