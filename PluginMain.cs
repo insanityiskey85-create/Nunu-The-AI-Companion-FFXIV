@@ -71,8 +71,8 @@ public sealed class PluginMain : IDalamudPlugin
     {
         Instance = this;
 
-        // Stream-friendly timeout
-        _http.Timeout = TimeSpan.FromSeconds(180);
+        // Infinite HTTP timeout; we control lifetime via CancellationTokenSource.
+        _http.Timeout = System.Threading.Timeout.InfiniteTimeSpan;
 
         // Config
         Config = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
@@ -411,6 +411,8 @@ public sealed class PluginMain : IDalamudPlugin
     {
         if (_isStreaming) _cts?.Cancel();
         _isStreaming = true;
+
+        // Infinite stream; cancel manually when needed.
         _cts = new CancellationTokenSource();
 
         var full = new StringBuilder();
