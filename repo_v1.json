@@ -1,24 +1,15 @@
 [
   {
-    "Author": "Real Nunu (The Soul Weeper)",
+    "Author": "Nunubu Nubu",
     "Name": "Nunu The AI Companion",
-    "Punchline": "WAH! A tavern-tongued void-bard in your chat window.",
-    "Description": "In-character, ToS-safe RP chat window. Streams from your local LLM proxy (Ollama-ready).",
-    "RepoUrl": "https://github.com/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV",
-    "InternalName": "NunuTheAICompanion",
+    "Punchline": "Your soulbound AI Bard Companion",
+    "Description": "Little Nunu listens, sings, and replies in your world.",
+    "InternalName": "NunuTheAiCompanion",
     "AssemblyVersion": "1.0.1.8",
-    "DalamudApiLevel": 13,
-    "ApplicableVersion": "any",
-    "Tags": [ "chat", "rp", "ai", "overlay", "nunu" ],
-    "CategoryTags": [ "utility" ],
-    "LoadPriority": 0,
-    "ImageUrls": [ null ],
+    "RepoUrl": "https://github.com/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV",
+    "DownloadLinkInstall": "https://github.com/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV/releases/latest/download/NunuTheAiCompanion.zip",
+    "DownloadLinkUpdate": "https://github.com/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV/releases/latest/download/NunuTheAiCompanion.zip",
     "IconUrl": "https://raw.githubusercontent.com/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV/master/WOW.png",
-    "Changelog": "v1.0.1.8: Two-pane chat window (You ⇄ Little Nunu), streaming fixes, UI polish.",
-    "IsHide": false,
-    "IsTestingExclusive": false,
-
-    "DownloadLinkInstall": "https://github.com/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV/releases/download/v1.0.1.8/NunuTheAICompanion-1.0.1.8.zip",
-    "DownloadLinkUpdate": "https://github.com/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV/releases/download/v1.0.1.8/NunuTheAICompanion-1.0.1.8.zip"
+    "ApplicableVersion": "any"
   }
 ]
