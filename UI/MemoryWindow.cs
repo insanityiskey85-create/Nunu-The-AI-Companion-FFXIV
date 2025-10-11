@@ -1,9 +1,7 @@
 ﻿using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
-using Nunu_The_AI_Companion;
 using NunuTheAICompanion.Services;
-using System;
 using System.Numerics;
 
 namespace NunuTheAICompanion.UI;
