@@ -6,17 +6,15 @@ using Dalamud.Plugin.Services;
 namespace NunuTheAICompanion.Services;
 
 /// <summary>
-/// Listens to FFXIV chat via Dalamud IChatGui and forwards eligible messages
-/// (callsign + whitelist + channel filter) to the provided callback.
-/// Compatible with SDKs that pass SeString by ref or by value.
+/// Listens to game chat and forwards eligible messages to the AI pipeline (API 13).
 /// </summary>
 public sealed class ChatListener : IDisposable
 {
     private readonly IChatGui _chatGui;
     private readonly IPluginLog _log;
     private readonly Configuration _config;
-    private readonly Action<string /*sender*/, string /*text*/> _onEligibleMessage;
-    private readonly Action<string /*debug line*/>? _mirrorDebug;
+    private readonly Action<string /*author*/, string /*text*/> _onEligibleMessage;
+    private readonly Action<string>? _mirrorDebug;
 
     public ChatListener(
         IChatGui chatGui,
@@ -31,13 +29,9 @@ public sealed class ChatListener : IDisposable
         _onEligibleMessage = onEligibleMessage ?? throw new ArgumentNullException(nameof(onEligibleMessage));
         _mirrorDebug = mirrorDebugToWindow;
 
-        _chatGui.ChatMessage += OnChatMessage; // compiler binds to a matching overload below
-        _log.Information("[ChatListener] Subscribed to ChatMessage.");
-    }
-
-    private void OnChatMessage(XivChatType type, int timestamp, ref SeString sender, ref SeString message, ref bool isHandled)
-    {
-        throw new NotImplementedException();
+        // API 13 signature: (XivChatType, int timestamp, ref SeString sender, ref SeString message, ref bool isHandled)
+        _chatGui.ChatMessage += OnChatMessage;
+        _log.Information("[ChatListener] Subscribed to ChatMessage (API13).");
     }
 
     public void Dispose()
@@ -46,55 +40,34 @@ public sealed class ChatListener : IDisposable
         _log.Information("[ChatListener] Unsubscribed from ChatMessage.");
     }
 
-    // ---- Overload A: SeString by ref (common) ----
-    private void OnChatMessage(
-        XivChatType type,
-        uint senderId,
-        ref SeString sender,
-        ref SeString message,
-        ref bool isHandled)
-    {
-        HandleMessage(type, senderId, sender.TextValue, message.TextValue, ref isHandled);
-    }
-
-    // ---- Overload B: SeString by value (some SDKs) ----
-    private void OnChatMessage(
-        XivChatType type,
-        uint senderId,
-        SeString sender,
-        SeString message,
-        ref bool isHandled)
-    {
-        HandleMessage(type, senderId, sender.TextValue, message.TextValue, ref isHandled);
-    }
-
-    private void HandleMessage(
-        XivChatType type,
-        uint senderId,
-        string? senderText,
-        string? messageText,
-        ref bool isHandled)
+    // ---- API 13 exact signature ----
+    private void OnChatMessage(XivChatType type, int timestamp, ref SeString sender, ref SeString message, ref bool isHandled)
     {
         try
         {
-            var author = (senderText ?? string.Empty).Trim();
-            var text = (messageText ?? string.Empty).Trim();
+            var author = (sender.TextValue ?? string.Empty).Trim();
+            var text = (message.TextValue ?? string.Empty).Trim();
 
             if (_config.DebugListen)
             {
-                var dbg = $"[heard] type={type} senderId={senderId} author='{author}' text='{text}'";
+                var dbg = $"[heard] ts={timestamp} type={type} author='{author}' text='{text}'";
                 _log.Information(dbg);
-                if (_config.DebugMirrorToWindow && _mirrorDebug is not null)
-                    _mirrorDebug(dbg);
+                if (_config.DebugMirrorToWindow) _mirrorDebug?.Invoke(dbg);
             }
 
             if (!_config.ListenEnabled) return;
             if (!IsChannelAllowed(type)) return;
 
-            if (author.Length == 0 || author.Equals("You", StringComparison.OrdinalIgnoreCase)) return;
-            if (!IsAuthorAllowed(author)) return;
-            if (text.Length == 0) return;
+            if (author.Length == 0 || text.Length == 0) return;
 
+            // Accept "You" iff ListenSelf is enabled
+            var isSelf = author.Equals("You", StringComparison.OrdinalIgnoreCase);
+            if (isSelf && !_config.ListenSelf) return;
+
+            // If not self, enforce whitelist if present
+            if (!isSelf && !IsAuthorAllowed(author)) return;
+
+            // Callsign filter
             if (_config.RequireCallsign)
             {
                 var cs = (_config.Callsign ?? string.Empty).Trim();
@@ -103,18 +76,15 @@ public sealed class ChatListener : IDisposable
                 var idx = text.IndexOf(cs, StringComparison.OrdinalIgnoreCase);
                 if (idx < 0) return;
 
-                var cleaned = text.Remove(idx, cs.Length).Trim();
-                if (cleaned.Length == 0) return;
-
-                _onEligibleMessage(author, cleaned);
-                return;
+                text = text.Remove(idx, cs.Length).Trim();
+                if (text.Length == 0) return;
             }
 
             _onEligibleMessage(author, text);
         }
         catch (Exception ex)
         {
-            _log.Error(ex, "ChatListener exception in HandleMessage.");
+            _log.Error(ex, "ChatListener exception in OnChatMessage.");
         }
     }
 
@@ -124,7 +94,7 @@ public sealed class ChatListener : IDisposable
         XivChatType.Shout => _config.ListenShout,
         XivChatType.Yell => _config.ListenYell,
         XivChatType.TellIncoming => _config.ListenTell,
-        XivChatType.TellOutgoing => false, // ignore our own tells
+        XivChatType.TellOutgoing => _config.ListenTell, // optional: your own /tell
         XivChatType.Party => _config.ListenParty,
         XivChatType.CrossParty => _config.ListenParty,
         XivChatType.Alliance => _config.ListenAlliance,
