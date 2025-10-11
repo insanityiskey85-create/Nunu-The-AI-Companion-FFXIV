@@ -52,6 +52,7 @@ public sealed class PluginMain : IDalamudPlugin
     private const string SearchCommand = "/nunusearch";
     private const string SpeakCommand = "/nunuspeak";   // on|off
     private const string ChanCommand = "/nunuchan";    // say|party|fc|shout|yell
+    private const string SendCommand = "/nunusend";    // manual test: /nunusend say hello
 
     public PluginMain()
     {
@@ -106,7 +107,7 @@ public sealed class PluginMain : IDalamudPlugin
             mirrorDebugToWindow: s => { if (Config.DebugMirrorToWindow) ChatWindow.AppendAssistant(s); });
 
         // Broadcaster (echo assistant replies to /say /party /fc etc) via CommandManager + Framework
-        _broadcaster = new ChatBroadcaster(CommandManager, Framework, Log, Config)
+        _broadcaster = new ChatBroadcaster(CommandManager, Framework, Log)
         {
             Enabled = false,                 // OFF by default; use /nunuspeak on
             MaxPerMinute = 6,
@@ -121,6 +122,7 @@ public sealed class PluginMain : IDalamudPlugin
         CommandManager.AddHandler(SearchCommand, new CommandInfo(OnSearchCommand) { HelpMessage = "Search the web: /nunusearch <query>" });
         CommandManager.AddHandler(SpeakCommand, new CommandInfo(OnSpeakCommand) { HelpMessage = "Broadcast replies to game chat: /nunuspeak on|off" });
         CommandManager.AddHandler(ChanCommand, new CommandInfo(OnChanCommand) { HelpMessage = "Set broadcast channel: /nunuchan say|party|fc|shout|yell" });
+        CommandManager.AddHandler(SendCommand, new CommandInfo(OnSendCommand) { HelpMessage = "Force-send: /nunusend <say|party|fc|shout|yell> <text>" });
 
         // UI hooks
         PluginInterface.UiBuilder.Draw += DrawUI;
@@ -215,6 +217,29 @@ public sealed class PluginMain : IDalamudPlugin
         ChatWindow.AppendAssistant($"Broadcast channel set to: {_echoChannel}");
     }
 
+    private void OnSendCommand(string cmd, string args)
+    {
+        if (_broadcaster is null) { ChatWindow.AppendAssistant("Broadcaster not available."); return; }
+        var a = (args ?? "").Trim();
+        var sp = a.IndexOf(' ');
+        if (sp <= 0) { ChatWindow.AppendAssistant("Usage: /nunusend <say|party|fc|shout|yell> <text>"); return; }
+
+        var chan = a[..sp].ToLowerInvariant();
+        var text = a[(sp + 1)..].Trim();
+        ChatBroadcaster.NunuChannel c = chan switch
+        {
+            "say" => ChatBroadcaster.NunuChannel.Say,
+            "party" or "p" => ChatBroadcaster.NunuChannel.Party,
+            "fc" => ChatBroadcaster.NunuChannel.FreeCompany,
+            "shout" or "sh" => ChatBroadcaster.NunuChannel.Shout,
+            "yell" or "y" => ChatBroadcaster.NunuChannel.Yell,
+            _ => ChatBroadcaster.NunuChannel.Say
+        };
+
+        if (!_broadcaster.Enabled) ChatWindow.AppendAssistant("[note] Broadcaster is OFF. Use /nunuspeak on");
+        _broadcaster.Enqueue(c, text);
+    }
+
     private void OnEligibleChatHeard(string author, string text)
     {
         // Mirror to Nunu window and forward to AI
@@ -285,6 +310,7 @@ public sealed class PluginMain : IDalamudPlugin
         CommandManager.RemoveHandler(SearchCommand);
         CommandManager.RemoveHandler(SpeakCommand);
         CommandManager.RemoveHandler(ChanCommand);
+        CommandManager.RemoveHandler(SendCommand);
         _http.Dispose();
         Log.Information("[Nunu] Plugin disposed.");
     }

@@ -14,7 +14,6 @@ namespace NunuTheAICompanion.Services;
 public sealed class ChatBroadcaster : IDisposable
 {
     private readonly IPluginLog _log;
-    private readonly Configuration _cfg;
     private readonly ICommandManager _cmd;
     private readonly IFramework _framework;
 
@@ -27,12 +26,11 @@ public sealed class ChatBroadcaster : IDisposable
     private int _sentThisMinute = 0;
     private DateTime _windowStart = DateTime.UtcNow;
 
-    public ChatBroadcaster(ICommandManager cmd, IFramework framework, IPluginLog log, Configuration cfg)
+    public ChatBroadcaster(ICommandManager cmd, IFramework framework, IPluginLog log)
     {
         _cmd = cmd ?? throw new ArgumentNullException(nameof(cmd));
         _framework = framework ?? throw new ArgumentNullException(nameof(framework));
         _log = log ?? throw new ArgumentNullException(nameof(log));
-        _cfg = cfg ?? throw new ArgumentNullException(nameof(cfg));
 
         _worker = new Thread(Work) { IsBackground = true, Name = "Nunu.ChatBroadcaster" };
         _worker.Start();
@@ -55,22 +53,24 @@ public sealed class ChatBroadcaster : IDisposable
     public int DelayBetweenLinesMs { get; set; } = 1500;
     public int MaxChunkLen { get; set; } = 430;         // leave room for prefix
 
-    // Enqueue a message for a channel (plugin ensures user opted-in; ToS-safe)
+    /// <summary>Enqueue a message for a channel. Decoupled from any "listening" flags.</summary>
     public void Enqueue(NunuChannel ch, string text)
     {
-        if (!Enabled) return;
+        if (!Enabled) { _log.Information("[Broadcaster] Ignored enqueue (disabled)."); return; }
         if (string.IsNullOrWhiteSpace(text)) return;
-        if (!IsChannelAllowed(ch)) return;
 
         foreach (var part in Chunk(text, MaxChunkLen))
+        {
             _queue.Enqueue((ch, part));
+            _log.Information("[Broadcaster] queued {Channel}: \"{Part}\"", ch, part);
+        }
 
         _wake.Set();
     }
 
     private void Work()
     {
-        _log.Information("[ChatBroadcaster] worker started");
+        _log.Information("[Broadcaster] worker started");
         while (_running)
         {
             try
@@ -82,15 +82,14 @@ public sealed class ChatBroadcaster : IDisposable
                     if (_sentThisMinute >= Math.Max(1, MaxPerMinute))
                     {
                         var wait = 60_000 - (int)(DateTime.UtcNow - _windowStart).TotalMilliseconds + 250;
-                        _log.Information($"[ChatBroadcaster] rate limit hit; sleeping {wait} ms");
+                        _log.Information("[Broadcaster] rate limit hit; sleeping {Wait} ms", wait);
                         if (wait > 0) Thread.Sleep(wait);
                         ResetWindowIfNeeded();
                     }
 
                     var prefix = ChannelPrefix(item.ch);
-                    if (prefix is null) continue;
-
                     var line = $"{prefix} {item.text}".TrimEnd();
+                    _log.Information("[Broadcaster] sending: {Line}", line);
 
                     // IMPORTANT: send on Framework thread
                     try
@@ -98,13 +97,13 @@ public sealed class ChatBroadcaster : IDisposable
                         _framework.RunOnFrameworkThread(() =>
                         {
                             try { _cmd.ProcessCommand(line); }
-                            catch (Exception ex) { _log.Error(ex, "[ChatBroadcaster] ProcessCommand failed"); }
+                            catch (Exception ex) { _log.Error(ex, "[Broadcaster] ProcessCommand failed for: {Line}", line); }
                         });
                         _sentThisMinute++;
                     }
                     catch (Exception ex)
                     {
-                        _log.Error(ex, "[ChatBroadcaster] scheduling command failed");
+                        _log.Error(ex, "[Broadcaster] scheduling command failed");
                     }
 
                     Thread.Sleep(Math.Max(250, DelayBetweenLinesMs));
@@ -114,11 +113,11 @@ public sealed class ChatBroadcaster : IDisposable
             }
             catch (Exception ex)
             {
-                _log.Error(ex, "[ChatBroadcaster] worker error");
+                _log.Error(ex, "[Broadcaster] worker error");
                 Thread.Sleep(1000);
             }
         }
-        _log.Information("[ChatBroadcaster] worker ended");
+        _log.Information("[Broadcaster] worker ended");
     }
 
     private void ResetWindowIfNeeded()
@@ -131,30 +130,24 @@ public sealed class ChatBroadcaster : IDisposable
         }
     }
 
-    private string? ChannelPrefix(NunuChannel ch) => ch switch
+    private static string ChannelPrefix(NunuChannel ch) => ch switch
     {
-        NunuChannel.Say => _cfg.ListenSay ? "/say" : null,
-        NunuChannel.Party => _cfg.ListenParty ? "/p" : null,
-        NunuChannel.FreeCompany => _cfg.ListenFreeCompany ? "/fc" : null,
-        NunuChannel.Shout => _cfg.ListenShout ? "/sh" : null,
-        NunuChannel.Yell => _cfg.ListenYell ? "/y" : null,
-        _ => null
-    };
-
-    private bool IsChannelAllowed(NunuChannel ch) => ch switch
-    {
-        NunuChannel.Say => _cfg.ListenSay,
-        NunuChannel.Party => _cfg.ListenParty,
-        NunuChannel.FreeCompany => _cfg.ListenFreeCompany,
-        NunuChannel.Shout => _cfg.ListenShout,
-        NunuChannel.Yell => _cfg.ListenYell,
-        _ => false
+        NunuChannel.Say => "/say",
+        NunuChannel.Party => "/p",
+        NunuChannel.FreeCompany => "/fc",
+        NunuChannel.Shout => "/sh",
+        NunuChannel.Yell => "/y",
+        _ => "/say"
     };
 
     private static string[] Chunk(string s, int maxLen)
     {
         var list = new System.Collections.Generic.List<string>();
         var sb = new StringBuilder(maxLen);
+
+        // Normalize newlines to spaces (commands ignore hard newlines)
+        s = s.Replace("\r\n", " ").Replace('\n', ' ');
+
         foreach (var word in s.Split(' ', StringSplitOptions.RemoveEmptyEntries))
         {
             if (sb.Length + word.Length + 1 > maxLen)
