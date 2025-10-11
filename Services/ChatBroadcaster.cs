@@ -9,7 +9,7 @@ namespace NunuTheAICompanion.Services;
 
 /// <summary>
 /// Safely posts Little Nunu's messages into in-game channels (/say, /p, /fc, etc.)
-/// Uses CommandManager.ProcessCommand on the Framework thread.
+/// Uses CommandManager.ProcessCommand on the Framework thread, with queueing and rate limits.
 /// </summary>
 public sealed class ChatBroadcaster : IDisposable
 {
@@ -22,7 +22,7 @@ public sealed class ChatBroadcaster : IDisposable
     private readonly Thread _worker;
     private volatile bool _running = true;
 
-    // Rate limit: N messages per minute
+    // Rate limit: N messages per minute (sliding window)
     private int _sentThisMinute = 0;
     private DateTime _windowStart = DateTime.UtcNow;
 
@@ -46,14 +46,23 @@ public sealed class ChatBroadcaster : IDisposable
         catch { }
     }
 
-    public enum NunuChannel { Say, Party, FreeCompany, Shout, Yell /*, Tell (needs target) */ }
+    public enum NunuChannel
+    {
+        Say,
+        Party,
+        FreeCompany,
+        Shout,
+        Yell,
+        Echo,          // local-only visibility for sanity checks
+        // Tell (needs target) – add overload if you want it
+    }
 
-    public bool Enabled { get; set; } = false;          // master toggle
-    public int MaxPerMinute { get; set; } = 6;          // conservative default
+    public bool Enabled { get; set; } = false;   // master toggle
+    public int MaxPerMinute { get; set; } = 6;   // conservative default
     public int DelayBetweenLinesMs { get; set; } = 1500;
-    public int MaxChunkLen { get; set; } = 430;         // leave room for prefix
+    public int MaxChunkLen { get; set; } = 430;  // leave room for prefix
 
-    /// <summary>Enqueue a message for a channel. Decoupled from any "listening" flags.</summary>
+    /// <summary>Enqueue a message for a channel. Decoupled from any listening flags.</summary>
     public void Enqueue(NunuChannel ch, string text)
     {
         if (!Enabled) { _log.Information("[Broadcaster] Ignored enqueue (disabled)."); return; }
@@ -62,7 +71,7 @@ public sealed class ChatBroadcaster : IDisposable
         foreach (var part in Chunk(text, MaxChunkLen))
         {
             _queue.Enqueue((ch, part));
-            _log.Information("[Broadcaster] queued {Channel}: \"{Part}\"", ch, part);
+            _log.Information("[Broadcaster] queued \"{Channel}\": \"{Part}\"", ch, part);
         }
 
         _wake.Set();
@@ -137,6 +146,7 @@ public sealed class ChatBroadcaster : IDisposable
         NunuChannel.FreeCompany => "/fc",
         NunuChannel.Shout => "/sh",
         NunuChannel.Yell => "/y",
+        NunuChannel.Echo => "/echo",
         _ => "/say"
     };
 

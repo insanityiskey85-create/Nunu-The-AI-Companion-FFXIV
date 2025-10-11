@@ -52,7 +52,8 @@ public sealed class PluginMain : IDalamudPlugin
     private const string SearchCommand = "/nunusearch";
     private const string SpeakCommand = "/nunuspeak";   // on|off
     private const string ChanCommand = "/nunuchan";    // say|party|fc|shout|yell
-    private const string SendCommand = "/nunusend";    // manual test: /nunusend say hello
+    private const string SendCommand = "/nunusend";    // /nunusend say hello
+    private const string RawCommand = "/nunucmd";     // /nunucmd /say raw line
 
     public PluginMain()
     {
@@ -98,7 +99,7 @@ public sealed class PluginMain : IDalamudPlugin
         _history.Add(("assistant", hello));
         Memory?.Append("assistant", hello, topic: "greeting");
 
-        // Chat listener (hears game chat and can trigger replies in Nunu window)
+        // Chat listener
         _listener = new ChatListener(
             ChatGui,
             Log,
@@ -106,10 +107,10 @@ public sealed class PluginMain : IDalamudPlugin
             OnEligibleChatHeard,
             mirrorDebugToWindow: s => { if (Config.DebugMirrorToWindow) ChatWindow.AppendAssistant(s); });
 
-        // Broadcaster (echo assistant replies to /say /party /fc etc) via CommandManager + Framework
+        // Broadcaster via CommandManager + Framework
         _broadcaster = new ChatBroadcaster(CommandManager, Framework, Log)
         {
-            Enabled = false,                 // OFF by default; use /nunuspeak on
+            Enabled = false,                 // OFF by default; enable with /nunuspeak on
             MaxPerMinute = 6,
             DelayBetweenLinesMs = 1500
         };
@@ -123,6 +124,7 @@ public sealed class PluginMain : IDalamudPlugin
         CommandManager.AddHandler(SpeakCommand, new CommandInfo(OnSpeakCommand) { HelpMessage = "Broadcast replies to game chat: /nunuspeak on|off" });
         CommandManager.AddHandler(ChanCommand, new CommandInfo(OnChanCommand) { HelpMessage = "Set broadcast channel: /nunuchan say|party|fc|shout|yell" });
         CommandManager.AddHandler(SendCommand, new CommandInfo(OnSendCommand) { HelpMessage = "Force-send: /nunusend <say|party|fc|shout|yell> <text>" });
+        CommandManager.AddHandler(RawCommand, new CommandInfo(OnRawCommand) { HelpMessage = "Send a raw game command: /nunucmd <text>" });
 
         // UI hooks
         PluginInterface.UiBuilder.Draw += DrawUI;
@@ -222,7 +224,7 @@ public sealed class PluginMain : IDalamudPlugin
         if (_broadcaster is null) { ChatWindow.AppendAssistant("Broadcaster not available."); return; }
         var a = (args ?? "").Trim();
         var sp = a.IndexOf(' ');
-        if (sp <= 0) { ChatWindow.AppendAssistant("Usage: /nunusend <say|party|fc|shout|yell> <text>"); return; }
+        if (sp <= 0) { ChatWindow.AppendAssistant("Usage: /nunusend <say|party|fc|shout|yell|echo> <text>"); return; }
 
         var chan = a[..sp].ToLowerInvariant();
         var text = a[(sp + 1)..].Trim();
@@ -233,6 +235,7 @@ public sealed class PluginMain : IDalamudPlugin
             "fc" => ChatBroadcaster.NunuChannel.FreeCompany,
             "shout" or "sh" => ChatBroadcaster.NunuChannel.Shout,
             "yell" or "y" => ChatBroadcaster.NunuChannel.Yell,
+            "echo" => ChatBroadcaster.NunuChannel.Echo,
             _ => ChatBroadcaster.NunuChannel.Say
         };
 
@@ -240,9 +243,32 @@ public sealed class PluginMain : IDalamudPlugin
         _broadcaster.Enqueue(c, text);
     }
 
+    private void OnRawCommand(string cmd, string args)
+    {
+        var text = (args ?? "").Trim();
+        if (string.IsNullOrEmpty(text))
+        {
+            ChatWindow.AppendAssistant("Usage: /nunucmd <game command>, e.g. /nunucmd /say raw test");
+            return;
+        }
+        try
+        {
+            Framework.RunOnFrameworkThread(() =>
+            {
+                try { CommandManager.ProcessCommand(text); }
+                catch (Exception ex) { Log.Error(ex, "[Raw] ProcessCommand failed for: {Text}", text); }
+            });
+            ChatWindow.AppendAssistant($"[raw] sent: {text}");
+        }
+        catch (Exception ex)
+        {
+            ChatWindow.AppendAssistant($"[raw] error: {ex.Message}");
+            Log.Error(ex, "[Raw] scheduling failed");
+        }
+    }
+
     private void OnEligibleChatHeard(string author, string text)
     {
-        // Mirror to Nunu window and forward to AI
         ChatWindow.AppendAssistant($"“{text}” you say, {author}? Very well…");
         HandleUserSend(text);
     }
@@ -311,6 +337,7 @@ public sealed class PluginMain : IDalamudPlugin
         CommandManager.RemoveHandler(SpeakCommand);
         CommandManager.RemoveHandler(ChanCommand);
         CommandManager.RemoveHandler(SendCommand);
+        CommandManager.RemoveHandler(RawCommand);
         _http.Dispose();
         Log.Information("[Nunu] Plugin disposed.");
     }
@@ -395,6 +422,8 @@ public sealed class PluginMain : IDalamudPlugin
                 if (_broadcaster?.Enabled == true)
                 {
                     _broadcaster.Enqueue(_echoChannel, reply);
+                    // optional: also confirm locally so you see it's attempted even if channel is blocked
+                    // _broadcaster.Enqueue(ChatBroadcaster.NunuChannel.Echo, "(Nunu tried to speak in the selected channel)");
                 }
             }
         }

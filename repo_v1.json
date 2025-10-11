@@ -6,7 +6,7 @@
     "Description": "In-character, ToS-safe RP chat window. Streams from your local LLM proxy (Ollama-ready).",
     "RepoUrl": "https://github.com/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV",
     "InternalName": "NunuTheAICompanion",
-    "AssemblyVersion": "1.0.1.6",
+    "AssemblyVersion": "1.0.1.7",
     "DalamudApiLevel": 13,
     "ApplicableVersion": "any",
     "Tags": [ "chat", "rp", "ai", "overlay", "nunu" ],
@@ -14,11 +14,11 @@
     "LoadPriority": 0,
     "ImageUrls": [ null ],
     "IconUrl": "https://raw.githubusercontent.com/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV/master/WOW.png",
-    "Changelog": "v1.0.1.6: Two-pane chat window (You ⇄ Little Nunu), streaming fixes, UI polish.",
+    "Changelog": "v1.0.1.7: Two-pane chat window (You ⇄ Little Nunu), streaming fixes, UI polish.",
     "IsHide": false,
     "IsTestingExclusive": false,
 
-    "DownloadLinkInstall": "https://github.com/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV/releases/download/v1.0.1.6/NunuTheAICompanion-1.0.1.6.zip",
-    "DownloadLinkUpdate": "https://github.com/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV/releases/download/v1.0.1.6/NunuTheAICompanion-1.0.1.6.zip"
+    "DownloadLinkInstall": "https://github.com/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV/releases/download/v1.0.1.7/NunuTheAICompanion-1.0.1.7.zip",
+    "DownloadLinkUpdate": "https://github.com/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV/releases/download/v1.0.1.7/NunuTheAICompanion-1.0.1.7.zip"
   }
 ]
