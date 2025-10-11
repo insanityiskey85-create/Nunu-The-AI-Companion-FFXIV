@@ -9,7 +9,6 @@ using ImGuiCol = Dalamud.Bindings.ImGui.ImGuiCol;
 using ImGuiStyleVar = Dalamud.Bindings.ImGui.ImGuiStyleVar;
 using ImGuiWindowFlags = Dalamud.Bindings.ImGui.ImGuiWindowFlags;
 using ImGuiCond = Dalamud.Bindings.ImGui.ImGuiCond;
-using Nunu_The_AI_Companion;
 
 namespace NunuTheAICompanion.UI;
 

@@ -28,10 +28,9 @@ public sealed class ChatBroadcaster : IDisposable
 
     public ChatBroadcaster(ICommandManager cmd, IFramework framework, IPluginLog log)
     {
-        _cmd = cmd ?? throw new ArgumentNullException(nameof(cmd));
-        _framework = framework ?? throw new ArgumentNullException(nameof(framework));
-        _log = log ?? throw new ArgumentNullException(nameof(log));
-
+        _cmd = cmd;
+        _framework = framework;
+        _log = log;
         _worker = new Thread(Work) { IsBackground = true, Name = "Nunu.ChatBroadcaster" };
         _worker.Start();
     }
@@ -45,18 +44,8 @@ public sealed class ChatBroadcaster : IDisposable
     public int DelayBetweenLinesMs { get; set; } = 1500;
     public int MaxChunkLen { get; set; } = 430;
 
-    public void SetIpcRelay(IpcChatRelay? relay, bool preferIpc)
-    {
-        _ipc = relay;
-        _preferIpc = preferIpc;
-        _log.Information("[Broadcaster] IPC relay set. PreferIpc={Prefer}", _preferIpc);
-    }
-
-    public void SetNativeSender(Func<string, bool>? nativeSend)
-    {
-        _nativeSend = nativeSend;
-        _log.Information("[Broadcaster] Native sender {State}", nativeSend is null ? "DISABLED" : "ENABLED");
-    }
+    public void SetIpcRelay(IpcChatRelay? relay, bool preferIpc) { _ipc = relay; _preferIpc = preferIpc; }
+    public void SetNativeSender(Func<string, bool>? nativeSend) { _nativeSend = nativeSend; }
 
     public void Enqueue(NunuChannel ch, string text)
     {
@@ -64,11 +53,22 @@ public sealed class ChatBroadcaster : IDisposable
         if (string.IsNullOrWhiteSpace(text)) return;
 
         foreach (var part in Chunk(text, MaxChunkLen))
-        {
             _queue.Enqueue((ch, part));
-            _log.Information("[Broadcaster] queued \"{Channel}\": \"{Part}\"", ch, part);
-        }
         _wake.Set();
+    }
+
+    private string FormatOutgoing(NunuChannel ch, string body)
+    {
+        var cfg = PluginMain.Instance.Config;
+        var persona = cfg.BroadcastAsPersona ? (cfg.PersonaName ?? "Little Nunu") : null;
+        if (!string.IsNullOrWhiteSpace(persona))
+        {
+            var label = $"[{persona}] ";
+            var budget = Math.Max(1, MaxChunkLen - label.Length);
+            if (body.Length > budget) body = body[..budget];
+            body = label + body;
+        }
+        return $"{ChannelPrefix(ch)} {body}".TrimEnd();
     }
 
     private void Work()
@@ -84,13 +84,11 @@ public sealed class ChatBroadcaster : IDisposable
                     if (_sentThisMinute >= Math.Max(1, MaxPerMinute))
                     {
                         var wait = 60_000 - (int)(DateTime.UtcNow - _windowStart).TotalMilliseconds + 250;
-                        _log.Information("[Broadcaster] rate limit hit; sleeping {Wait} ms", wait);
                         if (wait > 0) Thread.Sleep(wait);
                         ResetWindowIfNeeded();
                     }
 
-                    var prefix = ChannelPrefix(item.ch);
-                    var line = $"{prefix} {item.text}".TrimEnd();
+                    var line = FormatOutgoing(item.ch, item.text);
                     _log.Information("[Broadcaster] sending: {Line}", line);
 
                     bool delivered = false;
@@ -98,34 +96,23 @@ public sealed class ChatBroadcaster : IDisposable
                     {
                         if (_nativeSend is not null) delivered = _nativeSend(line);
                         if (!delivered && _preferIpc && _ipc is not null) delivered = _ipc.TrySend(line);
-
                         if (!delivered)
                         {
                             _framework.RunOnFrameworkThread(() =>
                             {
-                                try { _cmd.ProcessCommand(line); }
-                                catch (Exception ex) { _log.Error(ex, "[Broadcaster] ProcessCommand failed for: {Line}", line); }
+                                try { _cmd.ProcessCommand(line); } catch (Exception ex) { _log.Error(ex, "[Broadcaster] ProcessCommand failed"); }
                             });
                             delivered = true;
                         }
-
                         if (delivered) _sentThisMinute++;
                     }
-                    catch (Exception ex)
-                    {
-                        _log.Error(ex, "[Broadcaster] scheduling/native/ipc send failed");
-                    }
+                    catch (Exception ex) { _log.Error(ex, "[Broadcaster] send failed"); }
 
                     Thread.Sleep(Math.Max(250, DelayBetweenLinesMs));
                 }
-
                 _wake.WaitOne();
             }
-            catch (Exception ex)
-            {
-                _log.Error(ex, "[Broadcaster] worker error");
-                Thread.Sleep(1000);
-            }
+            catch (Exception ex) { _log.Error(ex, "[Broadcaster] worker error"); Thread.Sleep(500); }
         }
         _log.Information("[Broadcaster] worker ended");
     }
@@ -138,12 +125,12 @@ public sealed class ChatBroadcaster : IDisposable
 
     private static string ChannelPrefix(NunuChannel ch) => ch switch
     {
-        NunuChannel.Say => "/say",
-        NunuChannel.Party => "/p",
+        NunuChannel.Say         => "/say",
+        NunuChannel.Party       => "/p",
         NunuChannel.FreeCompany => "/fc",
-        NunuChannel.Shout => "/sh",
-        NunuChannel.Yell => "/y",
-        NunuChannel.Echo => "/echo",
+        NunuChannel.Shout       => "/sh",
+        NunuChannel.Yell        => "/y",
+        NunuChannel.Echo        => "/echo",
         _ => "/say"
     };
 

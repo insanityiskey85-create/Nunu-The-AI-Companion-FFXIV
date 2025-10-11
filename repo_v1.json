@@ -5,10 +5,10 @@
     "Punchline": "Your soulbound AI Bard Companion",
     "Description": "Little Nunu listens, sings, and replies in your world.",
     "InternalName": "NunuTheAiCompanion",
-    "AssemblyVersion": "1.0.1.9",
+    "AssemblyVersion": "1.0.2.0",
     "RepoUrl": "https://github.com/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV",
-    "DownloadLinkInstall": "https://github.com/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV/releases/download/v1.0.1.9/NunuTheAICompanion-1.0.1.9.zip",
-    "DownloadLinkUpdate": "https://github.com/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV/releases/download/v1.0.1.9/NunuTheAICompanion-1.0.1.9.zip",
+    "DownloadLinkInstall": "https://github.com/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV/releases/download/v1.0.2.0/NunuTheAICompanion-1.0.2.0.zip",
+    "DownloadLinkUpdate": "https://github.com/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV/releases/download/v1.0.2.0/NunuTheAICompanion-1.0.2.0.zip",
     "IconUrl": "https://raw.githubusercontent.com/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV/master/WOW.png",
     "ApplicableVersion": "any"
   }

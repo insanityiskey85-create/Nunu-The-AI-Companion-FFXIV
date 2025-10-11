@@ -1,4 +1,4 @@
-﻿using Nunu_The_AI_Companion;
+﻿using System;
 using System.Collections.Generic;
 using System.Net.Http;
 using System.Text.Json;
@@ -12,53 +12,61 @@ public sealed class WebSearchClient
     private readonly HttpClient _http;
     private readonly Configuration _cfg;
 
-    public WebSearchClient(HttpClient http, Configuration cfg) { _http = http; _cfg = cfg; }
-
-    public sealed record Hit(string Title, string Url, string Snippet);
-
-    public async Task<List<Hit>> SearchAsync(string query, CancellationToken token)
+    public WebSearchClient(HttpClient http, Configuration cfg)
     {
-        var hits = new List<Hit>();
-        if (!_cfg.AllowInternet) return hits;
+        _http = http;
+        _cfg = cfg;
+    }
 
-        // very small SerpAPI-ish fetch; user supplies key in config
-        if (_cfg.SearchBackend == "serpapi" && !string.IsNullOrWhiteSpace(_cfg.SearchApiKey))
+    public async Task<List<(string title, string url, string snippet)>> SearchAsync(string query, CancellationToken token)
+    {
+        var results = new List<(string, string, string)>();
+
+        var backend = (_cfg.SearchBackend ?? "none").Trim().ToLowerInvariant();
+        if (backend is "none" or "" || !_cfg.AllowInternet)
+            return results;
+
+        if (backend == "serpapi")
         {
-            var u = $"https://serpapi.com/search.json?q={System.Web.HttpUtility.UrlEncode(query)}&num={_cfg.SearchMaxResults}&api_key={_cfg.SearchApiKey}";
-            using var res = await _http.GetAsync(u, token).ConfigureAwait(false);
+            var key = _cfg.SearchApiKey?.Trim();
+            if (string.IsNullOrEmpty(key))
+                return results; // no key -> silently no results
+
+            var uri = $"https://serpapi.com/search.json?q={Uri.EscapeDataString(query)}&engine=google&num={Math.Clamp(_cfg.SearchMaxResults, 1, 10)}&api_key={Uri.EscapeDataString(key)}";
+            using var req = new HttpRequestMessage(HttpMethod.Get, uri);
+            using var res = await _http.SendAsync(req, token).ConfigureAwait(false);
             res.EnsureSuccessStatusCode();
             var json = await res.Content.ReadAsStringAsync(token).ConfigureAwait(false);
+
             using var doc = JsonDocument.Parse(json);
             if (doc.RootElement.TryGetProperty("organic_results", out var arr) && arr.ValueKind == JsonValueKind.Array)
             {
-                int i = 0;
-                foreach (var e in arr.EnumerateArray())
+                foreach (var it in arr.EnumerateArray())
                 {
-                    if (i++ >= _cfg.SearchMaxResults) break;
-                    var title = e.TryGetProperty("title", out var t) ? t.GetString() ?? "" : "";
-                    var link = e.TryGetProperty("link", out var l) ? l.GetString() ?? "" : "";
-                    var snip = e.TryGetProperty("snippet", out var s) ? s.GetString() ?? "" : "";
-                    if (!string.IsNullOrEmpty(title) && !string.IsNullOrEmpty(link))
-                        hits.Add(new Hit(title, link, snip));
+                    var title = it.TryGetProperty("title", out var t) ? t.GetString() ?? "" : "";
+                    var link = it.TryGetProperty("link", out var l) ? l.GetString() ?? "" : "";
+                    var snip = it.TryGetProperty("snippet", out var s) ? s.GetString() ?? "" : "";
+                    if (!string.IsNullOrEmpty(link))
+                        results.Add((title, link, snip));
                 }
             }
+            return results;
         }
-        // else: could add Bing here similarly; leaving minimal for compile
 
-        return hits;
+        // Unknown backend -> nothing
+        return results;
     }
 
-    public static string FormatForContext(List<Hit> hits)
+    public static string FormatForContext(List<(string title, string url, string snippet)> hits)
     {
         if (hits.Count == 0) return "(no results)";
         var sb = new System.Text.StringBuilder();
         int i = 1;
         foreach (var h in hits)
         {
-            sb.AppendLine($"{i++}. {h.Title}");
-            if (!string.IsNullOrWhiteSpace(h.Snippet))
-                sb.AppendLine($"   {h.Snippet}");
-            sb.AppendLine($"   {h.Url}");
+            sb.Append(i++).Append(". ").Append(string.IsNullOrEmpty(h.title) ? h.url : h.title).Append('\n');
+            if (!string.IsNullOrEmpty(h.snippet)) sb.Append("   ").Append(h.snippet).Append('\n');
+            sb.Append("   ").Append(h.url).Append('\n');
         }
         return sb.ToString();
     }
