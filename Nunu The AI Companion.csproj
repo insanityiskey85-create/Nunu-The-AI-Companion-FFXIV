@@ -5,6 +5,14 @@
     <Nullable>enable</Nullable>
     <AssemblyName>Nunu The AI Companion</AssemblyName>
   </PropertyGroup>
+  <ItemGroup>
+    <Compile Remove="api.cs" />
+    <Compile Remove="Chat.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="api.cs" />
+    <None Include="Chat.cs" />
+  </ItemGroup>
 
   <ItemGroup>
     <Reference Include="Dalamud" HintPath="$(DALAMUD_HOME)\Dalamud.dll" />
@@ -14,8 +22,4 @@
   </ItemGroup>
 
   <!-- Keep MidiBard sources in repo but EXCLUDE from compilation -->
-  <ItemGroup>
-    <Compile Remove="Chat.cs" />
-    <Compile Remove="api.cs" />
-  </ItemGroup>
 </Project>

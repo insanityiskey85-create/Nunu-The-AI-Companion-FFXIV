@@ -23,16 +23,13 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-using System;
+using Nunu_The_AI_Companion;
 using System.Runtime.InteropServices;
 using System.Text;
 
-using FFXIVClientStructs.FFXIV.Client.System.Memory;
-using FFXIVClientStructs.FFXIV.Client.System.String;
-
 using Framework = FFXIVClientStructs.FFXIV.Client.System.Framework.Framework;
 
-namespace MidiBard.Util;
+namespace NunuTheAICompanion;
 
 /// <summary>
 /// A class containing chat functionality
@@ -45,11 +42,11 @@ public static class Chat
         internal const string SanitiseString = "E8 ?? ?? ?? ?? 48 8D 4C 24 ?? 0F B6 F8 E8 ?? ?? ?? ?? 48 8D 4D D0";
     }
 
-    private delegate void ProcessChatBoxDelegate(IntPtr uiModule, IntPtr message, IntPtr unused, byte a4);
+    private delegate void ProcessChatBoxDelegate(nint uiModule, nint message, nint unused, byte a4);
 
     private static ProcessChatBoxDelegate? ProcessChatBox { get; }
 
-    private static readonly unsafe delegate* unmanaged<Utf8String*, int, IntPtr, void> _sanitiseString = null!;
+    private static readonly unsafe delegate* unmanaged<Utf8String*, int, nint, void> _sanitiseString = null!;
 
     static Chat()
     {
@@ -62,7 +59,7 @@ public static class Chat
         {
             if (api.SigScanner.TryScanText(Signatures.SanitiseString, out var sanitisePtr))
             {
-                _sanitiseString = (delegate* unmanaged<Utf8String*, int, IntPtr, void>)sanitisePtr;
+                _sanitiseString = (delegate* unmanaged<Utf8String*, int, nint, void>)sanitisePtr;
             }
         }
     }
@@ -87,13 +84,13 @@ public static class Chat
             throw new InvalidOperationException("Could not find signature for chat sending");
         }
 
-        var uiModule = (IntPtr)Framework.Instance()->UIModule;
+        var uiModule = (nint)Framework.Instance()->UIModule;
 
         using var payload = new ChatPayload(message);
         var mem1 = Marshal.AllocHGlobal(400);
         Marshal.StructureToPtr(payload, mem1, false);
 
-        ProcessChatBox(uiModule, mem1, IntPtr.Zero, 0);
+        ProcessChatBox(uiModule, mem1, nint.Zero, 0);
 
         Marshal.FreeHGlobal(mem1);
     }
@@ -159,7 +156,7 @@ public static class Chat
 
         var uText = Utf8String.FromString(text);
 
-        _sanitiseString(uText, 0x27F, IntPtr.Zero);
+        _sanitiseString(uText, 0x27F, nint.Zero);
         var sanitised = uText->ToString();
 
         uText->Dtor();
@@ -172,7 +169,7 @@ public static class Chat
     private readonly struct ChatPayload : IDisposable
     {
         [FieldOffset(0)]
-        private readonly IntPtr textPtr;
+        private readonly nint textPtr;
 
         [FieldOffset(16)]
         private readonly ulong textLen;
@@ -185,19 +182,19 @@ public static class Chat
 
         internal ChatPayload(byte[] stringBytes)
         {
-            this.textPtr = Marshal.AllocHGlobal(stringBytes.Length + 30);
-            Marshal.Copy(stringBytes, 0, this.textPtr, stringBytes.Length);
-            Marshal.WriteByte(this.textPtr + stringBytes.Length, 0);
+            textPtr = Marshal.AllocHGlobal(stringBytes.Length + 30);
+            Marshal.Copy(stringBytes, 0, textPtr, stringBytes.Length);
+            Marshal.WriteByte(textPtr + stringBytes.Length, 0);
 
-            this.textLen = (ulong)(stringBytes.Length + 1);
+            textLen = (ulong)(stringBytes.Length + 1);
 
-            this.unk1 = 64;
-            this.unk2 = 0;
+            unk1 = 64;
+            unk2 = 0;
         }
 
         public void Dispose()
         {
-            Marshal.FreeHGlobal(this.textPtr);
+            Marshal.FreeHGlobal(textPtr);
         }
     }
 }
