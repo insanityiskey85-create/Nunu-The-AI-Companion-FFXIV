@@ -8,23 +8,26 @@ namespace NunuTheAICompanion;
 [Serializable]
 public class Configuration : IPluginConfiguration
 {
-    public int Version { get; set; } = 1;
+    public int Version { get; set; } = 4;
 
-    // ===== Backend (chat) =====
+    // ===== Backend (chat / LLM) =====
+    public string BackendMode { get; set; } = "ollama";
     public string BackendUrl { get; set; } = "http://127.0.0.1:11434/api/chat";
     public string ModelName { get; set; } = "nunu-8b";
     public float Temperature { get; set; } = 0.7f;
     public string SystemPrompt { get; set; } =
-        "You are Little Nunu, the Soul Weeper—be helpful, concise, kind, and in-universe.";
+        "You are Little Nunu, the Soul Weeper—helpful, concise, kind, and in-universe for FFXIV.";
+    public int ChatStreamTimeoutSec { get; set; } = 0; // 0 = infinite (plugin controls via CTS)
 
-    // Some UIs expect a free-form backend mode string (e.g., 'ollama', 'openai', 'proxy')
-    public string BackendMode { get; set; } = "ollama";
-
-    // ===== Memory =====
+    // ===== Memory (durable) =====
     public bool MemoryEnabled { get; set; } = true;
     public int MemoryMaxEntries { get; set; } = 200;
+    /// <summary>On startup, inject recent messages from memory into the active chat context.</summary>
+    public bool RestoreHistoryOnStartup { get; set; } = true;
+    /// <summary>How many recent messages to hydrate into the LLM context on startup.</summary>
+    public int HistoryLoadCount { get; set; } = 20;
 
-    // ===== Listening (game chat) =====
+    // ===== Listening (ingame chat intake) =====
     public bool ListenEnabled { get; set; } = true;
     public bool RequireCallsign { get; set; } = true;
     public string Callsign { get; set; } = "@nunu";
@@ -38,21 +41,18 @@ public class Configuration : IPluginConfiguration
     public bool ListenYell { get; set; } = false;
     public List<string>? Whitelist { get; set; } = new();
 
-    // ===== Debug =====
+    // ===== Debug / Diagnostics =====
     public bool DebugListen { get; set; } = false;
     public bool DebugMirrorToWindow { get; set; } = true;
 
-    // ===== Web Search =====
-    // Backend selector (e.g., 'serpapi', 'none'); UI already has SearchBackend
+    // ===== Web Search (tool) =====
     public string SearchBackend { get; set; } = "serpapi";
+    public string? SearchApiKey { get; set; } = "";
     public int SearchMaxResults { get; set; } = 5;
     public int SearchTimeoutSec { get; set; } = 20;
     public bool AllowInternet { get; set; } = true;
 
-    // API key for search providers that require it (e.g., SerpAPI)
-    public string? SearchApiKey { get; set; } = "";
-
-    // ===== Broadcast persona in real chat =====
+    // ===== Persona / Broadcast =====
     public bool BroadcastAsPersona { get; set; } = true;
     public string PersonaName { get; set; } = "Little Nunu";
 
@@ -60,11 +60,29 @@ public class Configuration : IPluginConfiguration
     public string IpcChannelName { get; set; } = "say";
     public bool PreferIpcRelay { get; set; } = true;
 
-    // ===== UI niceties expected by ChatWindow =====
-    public bool StartOpen { get; set; } = true;         // open chat window on load
-    public float WindowOpacity { get; set; } = 1.0f;    // 0..1 alpha for window
-    public string ChatDisplayName { get; set; } = "Real Nunu"; // label for your side in UI
-    public bool AsciiSafe { get; set; } = false;        // strip non-ASCII if desired
+    // ===== UI niceties =====
+    public bool StartOpen { get; set; } = true;
+    public float WindowOpacity { get; set; } = 1.0f;
+    public string ChatDisplayName { get; set; } = "Real Nunu";
+    public bool AsciiSafe { get; set; } = false;
+    public bool TwoPaneMode { get; set; } = true;
+    public bool ShowCopyButtons { get; set; } = true;
+    public float FontScale { get; set; } = 1.0f;
+    public bool LockWindow { get; set; } = false;
+
+    // ===== Image / Atelier =====
+    public string ImageBackend { get; set; } = "sdwebui";
+    public string ImageBaseUrl { get; set; } = "http://127.0.0.1:7860";
+    public string ImageModel { get; set; } = "Realistic_Vision_V6.0_NV_B1";
+    public int ImageSteps { get; set; } = 28;
+    public float ImageGuidance { get; set; } = 7.0f;
+    public int ImageWidth { get; set; } = 768;
+    public int ImageHeight { get; set; } = 1024;
+    public string ImageSampler { get; set; } = "DPM++ 2M Karras";
+    public int ImageSeed { get; set; } = -1;
+    public int ImageTimeoutSec { get; set; } = 180;
+    public bool SaveImages { get; set; } = true;
+    public string ImageSaveSubdir { get; set; } = "Images";
 
     [NonSerialized] private IDalamudPluginInterface? _pi;
     public void Initialize(IDalamudPluginInterface pi) => _pi = pi;

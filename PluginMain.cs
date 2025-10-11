@@ -20,17 +20,14 @@ public sealed class PluginMain : IDalamudPlugin
 {
     public string Name => "Nunu The AI Companion";
 
-    // ---------- Dalamud services ----------
     [PluginService] internal static IDalamudPluginInterface PluginInterface { get; private set; } = null!;
     [PluginService] internal static ICommandManager CommandManager { get; private set; } = null!;
     [PluginService] internal static IChatGui ChatGui { get; private set; } = null!;
     [PluginService] internal static IPluginLog Log { get; private set; } = null!;
     [PluginService] internal static IFramework Framework { get; private set; } = null!;
 
-    // ---------- Singleton ----------
     public static PluginMain Instance { get; private set; } = null!;
 
-    // ---------- Config + UI ----------
     internal Configuration Config { get; private set; } = null!;
     internal WindowSystem WindowSystem { get; } = new("NunuTheAICompanion");
     internal ChatWindow ChatWindow { get; private set; } = null!;
@@ -39,7 +36,6 @@ public sealed class PluginMain : IDalamudPlugin
     internal ImageWindow? ImageWindow { get; private set; }
     internal MemoryService? Memory { get; private set; }
 
-    // ---------- Runtime ----------
     private readonly List<(string role, string content)> _history = new();
     private readonly HttpClient _http = new();
     private OllamaClient _client = null!;
@@ -53,7 +49,6 @@ public sealed class PluginMain : IDalamudPlugin
 
     private ChatBroadcaster.NunuChannel _echoChannel = ChatBroadcaster.NunuChannel.Party;
 
-    // ---------- Commands ----------
     private const string Command = "/nunu";
     private const string DiagCommand = "/nunudiag";
     private const string DebugCommand = "/nunudebug";
@@ -71,23 +66,24 @@ public sealed class PluginMain : IDalamudPlugin
     {
         Instance = this;
 
-        // Infinite HTTP timeout; we control lifetime via CancellationTokenSource.
+        // Infinite HTTP timeout; we control cancellation manually.
         _http.Timeout = System.Threading.Timeout.InfiniteTimeSpan;
 
         // Config
         Config = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
         Config.Initialize(PluginInterface);
 
-        // Optional native chat via reflection (MidiBard)
+        // Native chat (optional via reflection)
         NativeChatSender.Initialize(this, PluginInterface, Log);
 
         // Services
         _client = new OllamaClient(_http, Config);
         _search = new WebSearchClient(_http, Config);
 
-        // Memory
+        // Memory (durable)
         var cfgDir = PluginInterface.GetPluginConfigDirectory();
         Memory = new MemoryService(cfgDir, Config.MemoryMaxEntries, Config.MemoryEnabled);
+        Memory.Load();
 
         // Windows
         ChatWindow = new ChatWindow(Config) { Size = new Vector2(740, 480) };
@@ -102,22 +98,38 @@ public sealed class PluginMain : IDalamudPlugin
             MemoryWindow = new MemoryWindow(Config, Memory, Log);
             if (MemoryWindow is not null) WindowSystem.AddWindow(MemoryWindow);
         }
-        catch { /* optional window */ }
+        catch { }
 
         try
         {
-            var imageSaveBase = System.IO.Path.Combine(cfgDir, "Images");
+            var imageSaveBase = System.IO.Path.Combine(cfgDir, Config.ImageSaveSubdir ?? "Images");
             var imageClient = new ImageClient(_http, Config, imageSaveBase);
             ImageWindow = new ImageWindow(Config, imageClient, Log);
             if (ImageWindow is not null) WindowSystem.AddWindow(ImageWindow);
         }
-        catch { /* optional window */ }
+        catch { }
 
-        // Greeting
+        // Greet + hydrate prior context if requested
         const string hello = "WAH! Little Nunu listens by the campfire. Call me with @nunu; I answer here, not in game chat.";
         ChatWindow.AppendAssistant(hello);
         _history.Add(("assistant", hello));
         Memory?.Append("assistant", hello, topic: "greeting");
+
+        if (Config.RestoreHistoryOnStartup && Memory?.Enabled == true)
+        {
+            var recent = Memory.GetRecentForContext(Math.Max(0, Config.HistoryLoadCount));
+            if (recent.Count > 0)
+            {
+                // Avoid replaying the greeting twice if it’s already the last entry.
+                foreach (var (role, content) in recent)
+                {
+                    // Don’t duplicate the greeting we just added.
+                    if (role == "assistant" && content == hello) continue;
+                    _history.Add((role, content));
+                }
+                ChatWindow.AppendAssistant($"[memory] Restored {recent.Count} lines into context.");
+            }
+        }
 
         // Listener
         _listener = new ChatListener(
@@ -136,7 +148,7 @@ public sealed class PluginMain : IDalamudPlugin
         };
         _broadcaster.SetNativeSender(fullLine => NativeChatSender.TrySendFull(fullLine));
 
-        // IPC relay (optional)
+        // IPC relay
         _ipcRelay = new IpcChatRelay(PluginInterface, Log);
         if (!string.IsNullOrWhiteSpace(Config.IpcChannelName))
         {
@@ -169,7 +181,6 @@ public sealed class PluginMain : IDalamudPlugin
         Log.Information("[Nunu] Plugin initialized. NativeChat available={Avail}", NativeChatSender.IsAvailable);
     }
 
-    // ---------- Public helpers ----------
     public void RehookListener()
     {
         try { _listener?.Dispose(); } catch { }
@@ -180,39 +191,25 @@ public sealed class PluginMain : IDalamudPlugin
         Log.Information("[Nunu] Listener rehooked.");
     }
 
-    // ---------- Command handlers ----------
     private void OnImgCommand(string command, string args)
     {
-        if (ImageWindow is null)
-        {
-            ChatGui.PrintError("Image window not available in this build.");
-            return;
-        }
+        if (ImageWindow is null) { ChatGui.PrintError("Image window not available in this build."); return; }
         ImageWindow.IsOpen = !ImageWindow.IsOpen;
     }
 
     private async void OnSearchCommand(string cmd, string args)
     {
         var q = (args ?? "").Trim();
-        if (string.IsNullOrWhiteSpace(q))
-        {
-            ChatWindow.AppendAssistant("Usage: /nunusearch <query>");
-            return;
-        }
+        if (string.IsNullOrWhiteSpace(q)) { ChatWindow.AppendAssistant("Usage: /nunusearch <query>"); return; }
 
         try
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(Math.Clamp(Config.SearchTimeoutSec, 5, 60)));
             var hits = await _search.SearchAsync(q, cts.Token);
-            if (hits.Count == 0)
-            {
-                ChatWindow.AppendAssistant($"No results for: {q}");
-                return;
-            }
+            if (hits.Count == 0) { ChatWindow.AppendAssistant($"No results for: {q}"); return; }
 
             var text = WebSearchClient.FormatForContext(hits);
             ChatWindow.AppendAssistant($"Web echoes for “{q}”:\n{text}");
-
             if (Memory?.Enabled == true) Memory.Append("tool:web.search", text, topic: $"search:{q}");
             _history.Add(("tool:web.search", text));
         }
@@ -227,47 +224,26 @@ public sealed class PluginMain : IDalamudPlugin
     {
         if (_broadcaster is null) { ChatWindow.AppendAssistant("Broadcaster not available."); return; }
         var a = (args ?? "").Trim().ToLowerInvariant();
-        if (a is "on" or "1" or "true")
-        {
-            _broadcaster.Enabled = true;
-            ChatWindow.AppendAssistant("Broadcast to game chat: ON");
-        }
-        else if (a is "off" or "0" or "false")
-        {
-            _broadcaster.Enabled = false;
-            ChatWindow.AppendAssistant("Broadcast to game chat: OFF");
-        }
-        else
-        {
-            ChatWindow.AppendAssistant("Usage: /nunuspeak on|off");
-        }
+        if (a is "on" or "1" or "true") { _broadcaster.Enabled = true; ChatWindow.AppendAssistant("Broadcast to game chat: ON"); }
+        else if (a is "off" or "0" or "false") { _broadcaster.Enabled = false; ChatWindow.AppendAssistant("Broadcast to game chat: OFF"); }
+        else ChatWindow.AppendAssistant("Usage: /nunuspeak on|off");
     }
 
     private void OnChanCommand(string cmd, string args)
     {
         var a = (args ?? "").Trim().ToLowerInvariant();
-        if (string.IsNullOrEmpty(a))
-        {
-            ChatWindow.AppendAssistant($"Current channel: {_echoChannel}. Usage: /nunuchan say|party|fc|shout|yell");
-            return;
-        }
+        if (string.IsNullOrEmpty(a)) { ChatWindow.AppendAssistant($"Current channel: {_echoChannel}. Usage: /nunuchan say|party|fc|shout|yell|echo"); return; }
 
-        switch (a)
+        _echoChannel = a switch
         {
-            case "say": _echoChannel = ChatBroadcaster.NunuChannel.Say; break;
-            case "party":
-            case "p": _echoChannel = ChatBroadcaster.NunuChannel.Party; break;
-            case "fc": _echoChannel = ChatBroadcaster.NunuChannel.FreeCompany; break;
-            case "shout":
-            case "sh": _echoChannel = ChatBroadcaster.NunuChannel.Shout; break;
-            case "yell":
-            case "y": _echoChannel = ChatBroadcaster.NunuChannel.Yell; break;
-            case "echo": _echoChannel = ChatBroadcaster.NunuChannel.Echo; break;
-            default:
-                ChatWindow.AppendAssistant("Unknown channel. Use: say | party | fc | shout | yell | echo");
-                return;
-        }
-
+            "say" => ChatBroadcaster.NunuChannel.Say,
+            "party" or "p" => ChatBroadcaster.NunuChannel.Party,
+            "fc" => ChatBroadcaster.NunuChannel.FreeCompany,
+            "shout" or "sh" => ChatBroadcaster.NunuChannel.Shout,
+            "yell" or "y" => ChatBroadcaster.NunuChannel.Yell,
+            "echo" => ChatBroadcaster.NunuChannel.Echo,
+            _ => _echoChannel
+        };
         ChatWindow.AppendAssistant($"Broadcast channel set to: {_echoChannel}");
     }
 
@@ -298,11 +274,7 @@ public sealed class PluginMain : IDalamudPlugin
     private void OnRawCommand(string cmd, string args)
     {
         var text = (args ?? "").Trim();
-        if (string.IsNullOrEmpty(text))
-        {
-            ChatWindow.AppendAssistant("Usage: /nunucmd <game command>, e.g. /nunucmd /say raw test");
-            return;
-        }
+        if (string.IsNullOrEmpty(text)) { ChatWindow.AppendAssistant("Usage: /nunucmd <game command>, e.g. /nunucmd /say raw test"); return; }
         try
         {
             Framework.RunOnFrameworkThread(() =>
@@ -322,11 +294,7 @@ public sealed class PluginMain : IDalamudPlugin
     private void OnIpcBind(string cmd, string args)
     {
         var name = (args ?? "").Trim();
-        if (_ipcRelay is null || string.IsNullOrEmpty(name))
-        {
-            ChatWindow.AppendAssistant("Usage: /nunuipcbind <channelName>");
-            return;
-        }
+        if (_ipcRelay is null || string.IsNullOrEmpty(name)) { ChatWindow.AppendAssistant("Usage: /nunuipcbind <channelName>"); return; }
         var ok = _ipcRelay.Bind(name);
         Config.IpcChannelName = name; Config.Save();
         _broadcaster?.SetIpcRelay(_ipcRelay, Config.PreferIpcRelay);
@@ -336,16 +304,20 @@ public sealed class PluginMain : IDalamudPlugin
     private void OnIpcPref(string cmd, string args)
     {
         var a = (args ?? "").Trim().ToLowerInvariant();
-        bool on = a is "on" or "1" or "true";
-        bool off = a is "off" or "0" or "false";
-        if (!on && !off)
+        bool? state = a switch
+        {
+            "on" or "1" or "true" => true,
+            "off" or "0" or "false" => false,
+            _ => null
+        };
+        if (state is null)
         {
             ChatWindow.AppendAssistant($"[ipc] PreferIpcRelay={(Config.PreferIpcRelay ? "ON" : "OFF")}. Usage: /nunuipcmode on|off");
             return;
         }
-        Config.PreferIpcRelay = on; Config.Save();
+        Config.PreferIpcRelay = state.Value; Config.Save();
         _broadcaster?.SetIpcRelay(_ipcRelay, Config.PreferIpcRelay);
-        ChatWindow.AppendAssistant($"[ipc] PreferIpcRelay {(on ? "ON" : "OFF")}");
+        ChatWindow.AppendAssistant($"[ipc] PreferIpcRelay {(state.Value ? "ON" : "OFF")}");
     }
 
     private void OnCommand(string command, string args)
@@ -372,16 +344,8 @@ public sealed class PluginMain : IDalamudPlugin
     private void OnDebugCommand(string cmd, string args)
     {
         var a = (args ?? "").Trim().ToLowerInvariant();
-        if (a is "on" or "1" or "true")
-        {
-            Config.DebugListen = true; Config.Save();
-            ChatWindow.AppendAssistant("[diag] DebugListen ON"); Log.Information("DebugListen ON");
-        }
-        else if (a is "off" or "0" or "false")
-        {
-            Config.DebugListen = false; Config.Save();
-            ChatWindow.AppendAssistant("[diag] DebugListen OFF"); Log.Information("DebugListen OFF");
-        }
+        if (a is "on" or "1" or "true") { Config.DebugListen = true; Config.Save(); ChatWindow.AppendAssistant("[diag] DebugListen ON"); Log.Information("DebugListen ON"); }
+        else if (a is "off" or "0" or "false") { Config.DebugListen = false; Config.Save(); ChatWindow.AppendAssistant("[diag] DebugListen OFF"); Log.Information("DebugListen OFF"); }
         else if (a.StartsWith("mirror"))
         {
             var parts = a.Split(' ', StringSplitOptions.RemoveEmptyEntries);
@@ -390,13 +354,9 @@ public sealed class PluginMain : IDalamudPlugin
             ChatWindow.AppendAssistant($"[diag] DebugMirrorToWindow {(set ? "ON" : "OFF")}");
             Log.Information("DebugMirrorToWindow {State}", set ? "ON" : "OFF");
         }
-        else
-        {
-            ChatWindow.AppendAssistant("[diag] Usage: /nunudebug on | off | mirror [on|off]");
-        }
+        else ChatWindow.AppendAssistant("[diag] Usage: /nunudebug on | off | mirror [on|off]");
     }
 
-    // ---------- Chat pipeline ----------
     private void HandleUserSend(string text)
     {
         _history.Add(("user", text));
@@ -411,9 +371,7 @@ public sealed class PluginMain : IDalamudPlugin
     {
         if (_isStreaming) _cts?.Cancel();
         _isStreaming = true;
-
-        // Infinite stream; cancel manually when needed.
-        _cts = new CancellationTokenSource();
+        _cts = new CancellationTokenSource(); // infinite by default
 
         var full = new StringBuilder();
 
@@ -425,7 +383,7 @@ public sealed class PluginMain : IDalamudPlugin
 
                 var chunk = delta;
 
-                // simple inline tool-call: <<search: query>>
+                // Inline tool-call: <<search: query>>
                 int markerStart = chunk.IndexOf("<<search:", StringComparison.OrdinalIgnoreCase);
                 if (markerStart >= 0)
                 {
@@ -468,13 +426,10 @@ public sealed class PluginMain : IDalamudPlugin
             if (!string.IsNullOrEmpty(reply))
             {
                 _history.Add(("assistant", reply));
-                if (Memory?.Enabled == true)
-                    Memory.Append("assistant", reply, topic: "chat");
+                if (Memory?.Enabled == true) Memory.Append("assistant", reply, topic: "chat");
 
                 if (_broadcaster?.Enabled == true)
-                {
                     _broadcaster.Enqueue(_echoChannel, reply);
-                }
             }
         }
     }
@@ -485,12 +440,12 @@ public sealed class PluginMain : IDalamudPlugin
         HandleUserSend(text);
     }
 
-    // ---------- UI ----------
     private void DrawUI() => WindowSystem.Draw();
 
     public void Dispose()
     {
-        _cts?.Cancel();
+        try { _cts?.Cancel(); } catch { }
+        try { Memory?.Flush(); } catch { }
         _listener?.Dispose();
         _broadcaster?.Dispose();
         _ipcRelay?.Dispose();
