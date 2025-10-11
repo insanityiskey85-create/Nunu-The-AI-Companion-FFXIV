@@ -20,16 +20,16 @@ public sealed class OllamaClient
     }
 
     /// <summary>
-    /// Minimal, safe streaming reader with ZERO catch blocks (so we can yield legally).
-    /// We do not parse JSON to avoid parse exceptions; we just emit text lines as they arrive.
-    /// Caller (PluginMain.StreamAssistantAsync) already has try/catch to surface errors.
+    /// Streams assistant text from an Ollama-compatible endpoint.
+    /// Consumes SSE/JSONL lines like: data: {"message":{"content":"..."},"done":false}
+    /// Emits ONLY the human-readable text (message.content or response).
+    /// No try/catch here (callers handle errors).
     /// </summary>
     public async IAsyncEnumerable<string> StreamChatAsync(
         string url,
         List<(string role, string content)> history,
         [EnumeratorCancellation] CancellationToken token)
     {
-        // Build request payload
         var payload = new
         {
             model = _cfg.ModelName,
@@ -49,76 +49,106 @@ public sealed class OllamaClient
 
         using var s = await res.Content.ReadAsStreamAsync(token).ConfigureAwait(false);
 
-        var buf = new byte[4096];
-        var sb = new StringBuilder();
+        var buf = new byte[8192];
+        var acc = new StringBuilder();   // raw incoming chars (SSE lines)
+        var obj = new StringBuilder();   // current JSON object
+        var depth = 0;                   // brace depth
+        var inStr = false;               // inside JSON string
+        var esc = false;                 // previous char was '\'
+
+        static string? ExtractText(string json)
+        {
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+
+            // Prefer "message.content" (Ollama chat)
+            if (root.TryGetProperty("message", out var msg) &&
+                msg.ValueKind == JsonValueKind.Object &&
+                msg.TryGetProperty("content", out var content) &&
+                content.ValueKind == JsonValueKind.String)
+                return content.GetString();
+
+            // Fallback "response" (some backends)
+            if (root.TryGetProperty("response", out var resp) &&
+                resp.ValueKind == JsonValueKind.String)
+                return resp.GetString();
+
+            // Ignore objects that don't contain text (done/telemetry)
+            return null;
+        }
 
         while (!token.IsCancellationRequested)
         {
             var n = await s.ReadAsync(buf, 0, buf.Length, token).ConfigureAwait(false);
             if (n <= 0) break;
 
-            sb.Append(Encoding.UTF8.GetString(buf, 0, n));
+            acc.Append(Encoding.UTF8.GetString(buf, 0, n));
 
-            // emit complete lines
-            while (true)
+            for (int i = 0; i < acc.Length; i++)
             {
-                var all = sb.ToString();
-                var nl = all.IndexOf('\n');
-                if (nl < 0) break;
+                var ch = acc[i];
 
-                var line = all[..nl].Trim();
-                sb.Remove(0, nl + 1);
-
-                if (line.Length == 0) continue;
-
-                // If the backend uses SSE like "data: {...}" strip the prefix.
-                const string dataPrefix = "data:";
-                if (line.StartsWith(dataPrefix))
-                    line = line[dataPrefix.Length..].Trim();
-
-                // If it's a simple JSON object with "response"/"message.content", we *attempt*
-                // a safe extraction WITHOUT try/catch by doing cheap checks; otherwise emit raw.
-                if (line.Length > 0 && line[0] == '{' && line[^1] == '}')
+                // Strip 'data:' prefix when not inside an object
+                if (depth == 0 && !inStr)
                 {
-                    // Heuristic extraction without throwing: look for quoted field names.
-                    // If not found, just emit the raw line.
-                    // (We avoid JsonDocument.Parse to keep this try/catch-free.)
-                    var lower = line.ToLowerInvariant();
-                    var kMsg = "\"message\"";
-                    var kCont = "\"content\"";
-                    var kResp = "\"response\"";
+                    if (char.IsWhiteSpace(ch)) continue;
 
-                    if (lower.Contains(kResp))
+                    if (acc.Length - i >= 5 &&
+                        acc[i] == 'd' && acc[i + 1] == 'a' && acc[i + 2] == 't' && acc[i + 3] == 'a' && acc[i + 4] == ':')
                     {
-                        // Very loose extraction: "response":"...".
-                        var idx = lower.IndexOf(kResp);
-                        var colon = line.IndexOf(':', idx);
-                        if (colon > 0)
-                        {
-                            var val = line[(colon + 1)..].Trim().TrimStart('"');
-                            var end = val.LastIndexOf('"');
-                            if (end > 0) val = val[..end];
-                            if (!string.IsNullOrEmpty(val)) { yield return val; continue; }
-                        }
-                    }
-                    else if (lower.Contains(kMsg) && lower.Contains(kCont))
-                    {
-                        // Loose extraction for message.content
-                        var contIdx = lower.IndexOf(kCont);
-                        var colon = line.IndexOf(':', contIdx);
-                        if (colon > 0)
-                        {
-                            var val = line[(colon + 1)..].Trim().TrimStart('"');
-                            var end = val.LastIndexOf('"');
-                            if (end > 0) val = val[..end];
-                            if (!string.IsNullOrEmpty(val)) { yield return val; continue; }
-                        }
+                        i += 4;
+                        continue;
                     }
                 }
 
-                // Fallback: emit raw line/chunk
-                yield return line;
+                // handle JSON string/escape state
+                if (inStr)
+                {
+                    obj.Append(ch);
+                    if (esc) { esc = false; continue; }
+                    if (ch == '\\') { esc = true; continue; }
+                    if (ch == '"') inStr = false;
+                    continue;
+                }
+
+                if (ch == '"') { inStr = true; obj.Append(ch); continue; }
+
+                if (ch == '{')
+                {
+                    depth++;
+                    obj.Append(ch);
+                    continue;
+                }
+
+                if (ch == '}')
+                {
+                    if (depth > 0) depth--;
+                    obj.Append(ch);
+
+                    if (depth == 0)
+                    {
+                        var text = ExtractText(obj.ToString());
+                        if (!string.IsNullOrEmpty(text))
+                            yield return text!;
+                        obj.Clear();
+                    }
+                    continue;
+                }
+
+                if (depth > 0)
+                    obj.Append(ch);
             }
+
+            // all characters consumed into obj or skipped; clear accumulator
+            acc.Clear();
+        }
+
+        // flush any final balanced object
+        if (depth == 0 && obj.Length > 0)
+        {
+            var text = ExtractText(obj.ToString());
+            if (!string.IsNullOrEmpty(text))
+                yield return text!;
         }
     }
 }

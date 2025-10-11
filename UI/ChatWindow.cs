@@ -9,8 +9,9 @@ using ImGuiCol = Dalamud.Bindings.ImGui.ImGuiCol;
 using ImGuiStyleVar = Dalamud.Bindings.ImGui.ImGuiStyleVar;
 using ImGuiWindowFlags = Dalamud.Bindings.ImGui.ImGuiWindowFlags;
 using ImGuiCond = Dalamud.Bindings.ImGui.ImGuiCond;
+using Nunu_The_AI_Companion;
 
-namespace Nunu_The_AI_Companion.UI;
+namespace NunuTheAICompanion.UI;
 
 /// <summary>
 /// Two-pane chat:
@@ -105,7 +106,7 @@ public sealed class ChatWindow : Window
         var me = string.IsNullOrWhiteSpace(_config.ChatDisplayName) ? "You" : _config.ChatDisplayName;
         ImGui.TextUnformatted($"Real Nunu: {me}");
         ImGui.SameLine(); ImGui.TextDisabled(" | "); ImGui.SameLine();
-        ImGui.TextUnformatted($"Little Nunu: connected to {(_config.BackendMode ?? "jsonl")} @ {_config.BackendUrl}");
+        ImGui.TextUnformatted($"Little Nunu: connected to {_config.BackendMode ?? "jsonl"} @ {_config.BackendUrl}");
 
         ImGui.EndChild();
     }
@@ -176,7 +177,7 @@ public sealed class ChatWindow : Window
                 ImGui.SetClipboardText(copy ?? string.Empty);
             }
             ImGui.SameLine();
-            if (ImGui.SmallButton("Copy all")) ImGui.SetClipboardText((_assistantTranscript.ToString() + _assistantStream.ToString()) ?? string.Empty);
+            if (ImGui.SmallButton("Copy all")) ImGui.SetClipboardText(_assistantTranscript.ToString() + _assistantStream.ToString() ?? string.Empty);
             ImGui.SameLine();
             ImGui.Checkbox("Auto-scroll", ref _autoScrollAssistant);
 

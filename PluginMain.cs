@@ -13,8 +13,8 @@ using Dalamud.Plugin.Services;
 using NunuTheAICompanion.Services;
 using NunuTheAICompanion.Interop;
 using NunuTheAICompanion.UI;
-using Nunu_The_AI_Companion.UI;
 using Nunu_The_AI_Companion;
+using Nunu_The_AI_Companion.UI;
 
 namespace NunuTheAICompanion;
 
@@ -63,6 +63,9 @@ public sealed class PluginMain : IDalamudPlugin
 
     public PluginMain()
     {
+        // bump timeout for streaming
+        _http.Timeout = TimeSpan.FromSeconds(180);
+
         // Config
         Config = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
         Config.Initialize(PluginInterface);
@@ -95,7 +98,7 @@ public sealed class PluginMain : IDalamudPlugin
 
         try
         {
-            var imageSaveBase = Path.Combine(cfgDir, "Images");
+            var imageSaveBase = System.IO.Path.Combine(cfgDir, "Images");
             var imageClient = new ImageClient(_http, Config, imageSaveBase);
             ImageWindow = new ImageWindow(Config, imageClient, Log);
             if (ImageWindow is not null) WindowSystem.AddWindow(ImageWindow);
@@ -342,7 +345,7 @@ public sealed class PluginMain : IDalamudPlugin
     {
         var s = $"[diag] ListenEnabled={Config.ListenEnabled}, RequireCallsign={Config.RequireCallsign}, ListenSelf={Config.ListenSelf}, Callsign='{Config.Callsign}', " +
                 $"Say={Config.ListenSay}, Tell={Config.ListenTell}, Party={Config.ListenParty}, Alliance={Config.ListenAlliance}, FC={Config.ListenFreeCompany}, " +
-                $"Shout={Config.ListenShout}, Yell={Config.ListenYell}, WhitelistCount={Config.Whitelist?.Count ?? 0}, DebugListen={Config.DebugListen}, Mirror={Config.DebugMirrorToWindow}, " +
+                $"Shout={Config.ListenShout}, Yell={Config.ListenYell}, WhitelistCount={(Config.Whitelist?.Count ?? 0)}, DebugListen={Config.DebugListen}, Mirror={Config.DebugMirrorToWindow}, " +
                 $"AllowInternet={Config.AllowInternet}, SearchBackend={Config.SearchBackend}, MaxRes={Config.SearchMaxResults}, " +
                 $"SpeakEnabled={_broadcaster?.Enabled}, EchoChannel={_echoChannel}, IpcChannel='{Config.IpcChannelName}', PreferIpc={Config.PreferIpcRelay}, NativeAvail={NativeChatSender.IsAvailable}";
         Log.Information(s);
@@ -450,7 +453,7 @@ public sealed class PluginMain : IDalamudPlugin
                         {
                             ChatWindow.AppendAssistantDelta($"\n[search error] {ex.Message}\n");
                         }
-                        chunk = chunk.Remove(markerStart, markerEnd + 2 - markerStart);
+                        chunk = chunk.Remove(markerStart, (markerEnd + 2) - markerStart);
                     }
                 }
 
