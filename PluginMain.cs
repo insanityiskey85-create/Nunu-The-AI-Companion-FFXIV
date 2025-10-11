@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Numerics;
 using System.Net.Http;
 using System.Text;
@@ -21,6 +22,7 @@ public sealed class PluginMain : IDalamudPlugin
     [PluginService] internal static ICommandManager CommandManager { get; private set; } = null!;
     [PluginService] internal static IChatGui ChatGui { get; private set; } = null!;
     [PluginService] internal static IPluginLog Log { get; private set; } = null!;
+    [PluginService] internal static IFramework Framework { get; private set; } = null!;
 
     internal Configuration Config { get; private set; } = null!;
     internal WindowSystem WindowSystem { get; } = new("NunuTheAICompanion");
@@ -35,6 +37,9 @@ public sealed class PluginMain : IDalamudPlugin
     private readonly HttpClient _http = new();
     private OllamaClient _client = null!;
     private WebSearchClient _search = null!;
+    private ChatBroadcaster? _broadcaster;
+    private ChatBroadcaster.NunuChannel _echoChannel = ChatBroadcaster.NunuChannel.Party;
+
     private CancellationTokenSource? _cts;
     private bool _isStreaming;
 
@@ -45,6 +50,8 @@ public sealed class PluginMain : IDalamudPlugin
     private const string DebugCommand = "/nunudebug";
     private const string ImgCommand = "/nunuimg";
     private const string SearchCommand = "/nunusearch";
+    private const string SpeakCommand = "/nunuspeak";   // on|off
+    private const string ChanCommand = "/nunuchan";    // say|party|fc|shout|yell
 
     public PluginMain()
     {
@@ -90,7 +97,7 @@ public sealed class PluginMain : IDalamudPlugin
         _history.Add(("assistant", hello));
         Memory?.Append("assistant", hello, topic: "greeting");
 
-        // Chat listener
+        // Chat listener (hears game chat and can trigger replies in Nunu window)
         _listener = new ChatListener(
             ChatGui,
             Log,
@@ -98,12 +105,22 @@ public sealed class PluginMain : IDalamudPlugin
             OnEligibleChatHeard,
             mirrorDebugToWindow: s => { if (Config.DebugMirrorToWindow) ChatWindow.AppendAssistant(s); });
 
+        // Broadcaster (echo assistant replies to /say /party /fc etc) via CommandManager + Framework
+        _broadcaster = new ChatBroadcaster(CommandManager, Framework, Log, Config)
+        {
+            Enabled = false,                 // OFF by default; use /nunuspeak on
+            MaxPerMinute = 6,
+            DelayBetweenLinesMs = 1500
+        };
+
         // Commands
         CommandManager.AddHandler(Command, new CommandInfo(OnCommand) { HelpMessage = "Toggle Nunu. '/nunu config' settings. '/nunu memory' memories." });
         CommandManager.AddHandler(DiagCommand, new CommandInfo(OnDiag) { HelpMessage = "Diagnostics for Nunu chat listening." });
         CommandManager.AddHandler(DebugCommand, new CommandInfo(OnDebugCommand) { HelpMessage = "Toggle debug listening: /nunudebug on|off|mirror [on|off]" });
         CommandManager.AddHandler(ImgCommand, new CommandInfo(OnImgCommand) { HelpMessage = "Open Nunu's image atelier." });
         CommandManager.AddHandler(SearchCommand, new CommandInfo(OnSearchCommand) { HelpMessage = "Search the web: /nunusearch <query>" });
+        CommandManager.AddHandler(SpeakCommand, new CommandInfo(OnSpeakCommand) { HelpMessage = "Broadcast replies to game chat: /nunuspeak on|off" });
+        CommandManager.AddHandler(ChanCommand, new CommandInfo(OnChanCommand) { HelpMessage = "Set broadcast channel: /nunuchan say|party|fc|shout|yell" });
 
         // UI hooks
         PluginInterface.UiBuilder.Draw += DrawUI;
@@ -151,8 +168,56 @@ public sealed class PluginMain : IDalamudPlugin
         }
     }
 
+    private void OnSpeakCommand(string cmd, string args)
+    {
+        if (_broadcaster is null) { ChatWindow.AppendAssistant("Broadcaster not available."); return; }
+        var a = (args ?? "").Trim().ToLowerInvariant();
+        if (a is "on" or "1" or "true")
+        {
+            _broadcaster.Enabled = true;
+            ChatWindow.AppendAssistant("Broadcast to game chat: ON");
+        }
+        else if (a is "off" or "0" or "false")
+        {
+            _broadcaster.Enabled = false;
+            ChatWindow.AppendAssistant("Broadcast to game chat: OFF");
+        }
+        else
+        {
+            ChatWindow.AppendAssistant("Usage: /nunuspeak on|off");
+        }
+    }
+
+    private void OnChanCommand(string cmd, string args)
+    {
+        var a = (args ?? "").Trim().ToLowerInvariant();
+        if (string.IsNullOrEmpty(a))
+        {
+            ChatWindow.AppendAssistant($"Current channel: {_echoChannel}. Usage: /nunuchan say|party|fc|shout|yell");
+            return;
+        }
+
+        switch (a)
+        {
+            case "say": _echoChannel = ChatBroadcaster.NunuChannel.Say; break;
+            case "party":
+            case "p": _echoChannel = ChatBroadcaster.NunuChannel.Party; break;
+            case "fc": _echoChannel = ChatBroadcaster.NunuChannel.FreeCompany; break;
+            case "shout":
+            case "sh": _echoChannel = ChatBroadcaster.NunuChannel.Shout; break;
+            case "yell":
+            case "y": _echoChannel = ChatBroadcaster.NunuChannel.Yell; break;
+            default:
+                ChatWindow.AppendAssistant("Unknown channel. Use: say | party | fc | shout | yell");
+                return;
+        }
+
+        ChatWindow.AppendAssistant($"Broadcast channel set to: {_echoChannel}");
+    }
+
     private void OnEligibleChatHeard(string author, string text)
     {
+        // Mirror to Nunu window and forward to AI
         ChatWindow.AppendAssistant($"“{text}” you say, {author}? Very well…");
         HandleUserSend(text);
     }
@@ -171,7 +236,8 @@ public sealed class PluginMain : IDalamudPlugin
         var s = $"[diag] ListenEnabled={Config.ListenEnabled}, RequireCallsign={Config.RequireCallsign}, ListenSelf={Config.ListenSelf}, Callsign='{Config.Callsign}', " +
                 $"Say={Config.ListenSay}, Tell={Config.ListenTell}, Party={Config.ListenParty}, Alliance={Config.ListenAlliance}, FC={Config.ListenFreeCompany}, " +
                 $"Shout={Config.ListenShout}, Yell={Config.ListenYell}, WhitelistCount={(Config.Whitelist?.Count ?? 0)}, DebugListen={Config.DebugListen}, Mirror={Config.DebugMirrorToWindow}, " +
-                $"AllowInternet={Config.AllowInternet}, SearchBackend={Config.SearchBackend}, MaxRes={Config.SearchMaxResults}";
+                $"AllowInternet={Config.AllowInternet}, SearchBackend={Config.SearchBackend}, MaxRes={Config.SearchMaxResults}, " +
+                $"SpeakEnabled={_broadcaster?.Enabled}, EchoChannel={_echoChannel}";
         Log.Information(s);
         ChatWindow.AppendAssistant(s);
         ChatGui.Print("Nunu diag printed in window.");
@@ -210,12 +276,15 @@ public sealed class PluginMain : IDalamudPlugin
     {
         _cts?.Cancel();
         _listener?.Dispose();
+        _broadcaster?.Dispose();
         WindowSystem.RemoveAllWindows();
         CommandManager.RemoveHandler(Command);
         CommandManager.RemoveHandler(DiagCommand);
         CommandManager.RemoveHandler(DebugCommand);
         CommandManager.RemoveHandler(ImgCommand);
         CommandManager.RemoveHandler(SearchCommand);
+        CommandManager.RemoveHandler(SpeakCommand);
+        CommandManager.RemoveHandler(ChanCommand);
         _http.Dispose();
         Log.Information("[Nunu] Plugin disposed.");
     }
@@ -246,10 +315,10 @@ public sealed class PluginMain : IDalamudPlugin
             {
                 if (string.IsNullOrEmpty(delta)) continue;
 
-                // ---- FIX: work on a mutable copy instead of reassigning foreach variable ----
+                // Work on a mutable copy (foreach variable is readonly)
                 var chunk = delta;
 
-                // Optional: simple tool-call trigger <<search: ...>>
+                // Simple tool-call trigger <<search: ...>>
                 int markerStart = chunk.IndexOf("<<search:", StringComparison.OrdinalIgnoreCase);
                 if (markerStart >= 0)
                 {
@@ -295,6 +364,12 @@ public sealed class PluginMain : IDalamudPlugin
                 _history.Add(("assistant", reply));
                 if (Memory?.Enabled == true)
                     Memory.Append("assistant", reply, topic: "chat");
+
+                // If broadcasting is enabled, echo final reply to the chosen channel
+                if (_broadcaster?.Enabled == true)
+                {
+                    _broadcaster.Enqueue(_echoChannel, reply);
+                }
             }
         }
     }
