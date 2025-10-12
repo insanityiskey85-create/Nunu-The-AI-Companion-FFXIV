@@ -18,7 +18,10 @@
 	<ItemGroup>
 		<FrameworkReference Include="Microsoft.WindowsDesktop.App" />
 	</ItemGroup>
-
+	<ItemGroup>
+		<!-- Exclude the native chat injector file -->
+		<Compile Remove="Chat.cs" />
+	</ItemGroup>
 	<ItemGroup>
 		<Reference Include="Dalamud">
 			<HintPath>$(DalamudLibPath)\Dalamud.dll</HintPath>
