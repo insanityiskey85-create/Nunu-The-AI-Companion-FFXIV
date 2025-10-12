@@ -1,26 +1,41 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup>
-    <TargetFramework>net9.0-windows</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
-    <AssemblyName>Nunu The AI Companion</AssemblyName>
-	  <AssemblyVersion>1.0.2.2</AssemblyVersion>
-  </PropertyGroup>
-  <ItemGroup>
-    <Compile Remove="api.cs" />
-    <Compile Remove="Chat.cs" />
-  </ItemGroup>
-  <ItemGroup>
-    <None Include="api.cs" />
-    <None Include="Chat.cs" />
-  </ItemGroup>
+	<PropertyGroup>
+		<TargetFramework>net9.0-windows</TargetFramework>
+		<Nullable>enable</Nullable>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<EnableWindowsTargeting>true</EnableWindowsTargeting>
+		<UseWPF>false</UseWPF>
+		<UseWindowsForms>false</UseWindowsForms>
 
-  <ItemGroup>
-    <Reference Include="Dalamud" HintPath="$(DALAMUD_HOME)\Dalamud.dll" />
-    <Reference Include="Dalamud.Boot" HintPath="$(DALAMUD_HOME)\Dalamud.Boot.dll" />
-    <Reference Include="Dalamud.Interface" HintPath="$(DALAMUD_HOME)\Dalamud.Interface.dll" />
-    <Reference Include="Dalamud.Bindings.ImGui" HintPath="$(DALAMUD_HOME)\Dalamud.Bindings.ImGui.dll" />
-  </ItemGroup>
+		<!-- CHANGE THIS if your Hooks folder is different (dev/stable/staging). 
+         This folder must contain: Dalamud.dll, Dalamud.Interface.dll, Dalamud.Bindings.ImGui.dll -->
+		<DalamudLibPath Condition="'$(DalamudLibPath)'==''">
+			C:\Users\insan\AppData\Roaming\XIVLauncher\addon\Hooks\dev\
+		</DalamudLibPath>
+	</PropertyGroup>
 
-  <!-- Keep MidiBard sources in repo but EXCLUDE from compilation -->
+	<!-- Pulls in System.Speech -->
+	<ItemGroup>
+		<FrameworkReference Include="Microsoft.WindowsDesktop.App" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<Reference Include="Dalamud">
+			<HintPath>$(DalamudLibPath)\Dalamud.dll</HintPath>
+			<Private>false</Private>
+		</Reference>
+		<Reference Include="Dalamud.Interface">
+			<HintPath>$(DalamudLibPath)\Dalamud.Interface.dll</HintPath>
+			<Private>false</Private>
+		</Reference>
+		<Reference Include="Dalamud.Bindings.ImGui">
+			<HintPath>$(DalamudLibPath)\Dalamud.Bindings.ImGui.dll</HintPath>
+			<Private>false</Private>
+		</Reference>
+	</ItemGroup>
+
+	<!-- Let SDK include all .cs by default; remove any custom <Compile Include=...> duplicates -->
+	<PropertyGroup>
+		<EnableDefaultCompileItems>true</EnableDefaultCompileItems>
+	</PropertyGroup>
 </Project>

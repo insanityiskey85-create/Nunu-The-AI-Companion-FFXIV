@@ -17,17 +17,15 @@ public class Configuration : IPluginConfiguration
     public float Temperature { get; set; } = 0.7f;
     public string SystemPrompt { get; set; } =
         "You are Little Nunu, the Soul Weeper—helpful, concise, kind, and in-universe for FFXIV.";
-    public int ChatStreamTimeoutSec { get; set; } = 0; // 0 = infinite (plugin controls via CTS)
+    public int ChatStreamTimeoutSec { get; set; } = 0; // 0 = infinite (handled via CTS)
 
     // ===== Memory (durable) =====
     public bool MemoryEnabled { get; set; } = true;
     public int MemoryMaxEntries { get; set; } = 200;
-    /// <summary>On startup, inject recent messages from memory into the active chat context.</summary>
     public bool RestoreHistoryOnStartup { get; set; } = true;
-    /// <summary>How many recent messages to hydrate into the LLM context on startup.</summary>
     public int HistoryLoadCount { get; set; } = 20;
 
-    // ===== Listening (ingame chat intake) =====
+    // ===== Listening =====
     public bool ListenEnabled { get; set; } = true;
     public bool RequireCallsign { get; set; } = true;
     public string Callsign { get; set; } = "@nunu";
@@ -41,11 +39,11 @@ public class Configuration : IPluginConfiguration
     public bool ListenYell { get; set; } = false;
     public List<string>? Whitelist { get; set; } = new();
 
-    // ===== Debug / Diagnostics =====
+    // ===== Debug =====
     public bool DebugListen { get; set; } = false;
     public bool DebugMirrorToWindow { get; set; } = true;
 
-    // ===== Web Search (tool) =====
+    // ===== Web Search =====
     public string SearchBackend { get; set; } = "serpapi";
     public string? SearchApiKey { get; set; } = "";
     public int SearchMaxResults { get; set; } = 5;
@@ -60,7 +58,7 @@ public class Configuration : IPluginConfiguration
     public string IpcChannelName { get; set; } = "say";
     public bool PreferIpcRelay { get; set; } = true;
 
-    // ===== UI niceties =====
+    // ===== UI =====
     public bool StartOpen { get; set; } = true;
     public float WindowOpacity { get; set; } = 1.0f;
     public string ChatDisplayName { get; set; } = "Real Nunu";
@@ -83,6 +81,20 @@ public class Configuration : IPluginConfiguration
     public int ImageTimeoutSec { get; set; } = 180;
     public bool SaveImages { get; set; } = true;
     public string ImageSaveSubdir { get; set; } = "Images";
+
+    // ===== Voice (TTS) =====
+    public bool VoiceSpeakEnabled { get; set; } = true;
+    public string VoiceName { get; set; } = "";   // empty = system default
+    public int VoiceRate { get; set; } = 0;    // -10..10
+    public int VoiceVolume { get; set; } = 100;  // 0..100
+    public bool VoiceOnlyWhenWindowFocused { get; set; } = false;
+
+    // STT placeholders
+    public bool SttListenEnabled { get; set; } = false;
+    public string SttBackend { get; set; } = "none";
+    public string SttKey { get; set; } = "";
+    public string SttRegion { get; set; } = "";
+    public string SttServerUrl { get; set; } = "";
 
     [NonSerialized] private IDalamudPluginInterface? _pi;
     public void Initialize(IDalamudPluginInterface pi) => _pi = pi;

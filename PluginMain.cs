@@ -35,6 +35,7 @@ public sealed class PluginMain : IDalamudPlugin
     internal MemoryWindow? MemoryWindow { get; private set; }
     internal ImageWindow? ImageWindow { get; private set; }
     internal MemoryService? Memory { get; private set; }
+    internal VoiceService? Voice { get; private set; }
 
     private readonly List<(string role, string content)> _history = new();
     private readonly HttpClient _http = new();
@@ -61,19 +62,20 @@ public sealed class PluginMain : IDalamudPlugin
     private const string IpcBindCommand = "/nunuipcbind";
     private const string IpcPrefCommand = "/nunuipcmode";
     private const string RehookCommand = "/nunurehook";
+    private const string VoiceCommand = "/nunuvoice";
 
     public PluginMain()
     {
         Instance = this;
 
-        // Infinite HTTP timeout; we control cancellation manually.
+        // Infinite HTTP timeout; cancel via CTS.
         _http.Timeout = System.Threading.Timeout.InfiniteTimeSpan;
 
         // Config
         Config = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
         Config.Initialize(PluginInterface);
 
-        // Native chat (optional via reflection)
+        // Native chat (optional)
         NativeChatSender.Initialize(this, PluginInterface, Log);
 
         // Services
@@ -84,6 +86,9 @@ public sealed class PluginMain : IDalamudPlugin
         var cfgDir = PluginInterface.GetPluginConfigDirectory();
         Memory = new MemoryService(cfgDir, Config.MemoryMaxEntries, Config.MemoryEnabled);
         Memory.Load();
+
+        // Voice (TTS)
+        try { Voice = new VoiceService(Config, Log); } catch (Exception ex) { Log.Error(ex, "[Voice] init failed"); }
 
         // Windows
         ChatWindow = new ChatWindow(Config) { Size = new Vector2(740, 480) };
@@ -109,7 +114,7 @@ public sealed class PluginMain : IDalamudPlugin
         }
         catch { }
 
-        // Greet + hydrate prior context if requested
+        // Greeting + hydrate
         const string hello = "WAH! Little Nunu listens by the campfire. Call me with @nunu; I answer here, not in game chat.";
         ChatWindow.AppendAssistant(hello);
         _history.Add(("assistant", hello));
@@ -118,17 +123,13 @@ public sealed class PluginMain : IDalamudPlugin
         if (Config.RestoreHistoryOnStartup && Memory?.Enabled == true)
         {
             var recent = Memory.GetRecentForContext(Math.Max(0, Config.HistoryLoadCount));
-            if (recent.Count > 0)
+            foreach (var (role, content) in recent)
             {
-                // Avoid replaying the greeting twice if it’s already the last entry.
-                foreach (var (role, content) in recent)
-                {
-                    // Don’t duplicate the greeting we just added.
-                    if (role == "assistant" && content == hello) continue;
-                    _history.Add((role, content));
-                }
-                ChatWindow.AppendAssistant($"[memory] Restored {recent.Count} lines into context.");
+                if (role == "assistant" && content == hello) continue; // avoid double greet
+                _history.Add((role, content));
             }
+            if (recent.Count > 0)
+                ChatWindow.AppendAssistant($"[memory] Restored {recent.Count} lines into context.");
         }
 
         // Listener
@@ -146,16 +147,14 @@ public sealed class PluginMain : IDalamudPlugin
             MaxPerMinute = 6,
             DelayBetweenLinesMs = 1500
         };
-        _broadcaster.SetNativeSender(fullLine => NativeChatSender.TrySendFull(fullLine));
+        _broadcaster.SetNativeSender(full => NativeChatSender.TrySendFull(full));
 
-        // IPC relay
+        // IPC
         _ipcRelay = new IpcChatRelay(PluginInterface, Log);
         if (!string.IsNullOrWhiteSpace(Config.IpcChannelName))
         {
             var ok = _ipcRelay.Bind(Config.IpcChannelName);
-            ChatWindow.AppendAssistant(ok
-                ? $"[ipc] bound to '{Config.IpcChannelName}'."
-                : $"[ipc] failed to bind '{Config.IpcChannelName}'.");
+            ChatWindow.AppendAssistant(ok ? $"[ipc] bound to '{Config.IpcChannelName}'" : $"[ipc] failed to bind '{Config.IpcChannelName}'");
         }
         _broadcaster.SetIpcRelay(_ipcRelay, Config.PreferIpcRelay);
 
@@ -172,6 +171,7 @@ public sealed class PluginMain : IDalamudPlugin
         CommandManager.AddHandler(IpcBindCommand, new CommandInfo(OnIpcBind) { HelpMessage = "Bind an IPC sender: /nunuipcbind <channelName>" });
         CommandManager.AddHandler(IpcPrefCommand, new CommandInfo(OnIpcPref) { HelpMessage = "Prefer IPC over ProcessCommand: /nunuipcmode on|off" });
         CommandManager.AddHandler(RehookCommand, new CommandInfo((_, __) => RehookListener()) { HelpMessage = "Rehook chat listener" });
+        CommandManager.AddHandler(VoiceCommand, new CommandInfo(OnVoiceCommand) { HelpMessage = "TTS: /nunuvoice list | set <name> | rate <n> | vol <0-100> | on | off | test <text>" });
 
         // UI hooks
         PluginInterface.UiBuilder.Draw += DrawUI;
@@ -320,6 +320,72 @@ public sealed class PluginMain : IDalamudPlugin
         ChatWindow.AppendAssistant($"[ipc] PreferIpcRelay {(state.Value ? "ON" : "OFF")}");
     }
 
+    private void OnVoiceCommand(string cmd, string args)
+    {
+        var a = (args ?? "").Trim();
+        if (string.IsNullOrEmpty(a))
+        {
+            ChatWindow.AppendAssistant("Usage: /nunuvoice list | set <name> | rate <n> | vol <0-100> | on | off | test <text>");
+            return;
+        }
+
+        var parts = a.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+        var sub = parts[0].ToLowerInvariant();
+        var rest = parts.Length > 1 ? parts[1] : "";
+
+        switch (sub)
+        {
+            case "on":
+                Config.VoiceSpeakEnabled = true; Config.Save();
+                ChatWindow.AppendAssistant("[voice] speak ON");
+                break;
+            case "off":
+                Config.VoiceSpeakEnabled = false; Config.Save();
+                ChatWindow.AppendAssistant("[voice] speak OFF");
+                break;
+            case "list":
+                {
+                    var vs = Voice?.ListVoices() ?? Array.Empty<string>();
+                    ChatWindow.AppendAssistant(vs.Count == 0 ? "[voice] no voices detected" : "[voice] " + string.Join(", ", vs));
+                }
+                break;
+            case "set":
+                {
+                    if (string.IsNullOrWhiteSpace(rest)) { ChatWindow.AppendAssistant("[voice] set <name>"); break; }
+                    var ok = Voice?.TrySelectVoice(rest) ?? false;
+                    ChatWindow.AppendAssistant(ok ? $"[voice] selected '{rest}'" : $"[voice] failed for '{rest}'");
+                }
+                break;
+            case "rate":
+                {
+                    if (!int.TryParse(rest, out var r)) { ChatWindow.AppendAssistant("[voice] rate -10..10"); break; }
+                    r = Math.Clamp(r, -10, 10);
+                    Config.VoiceRate = r; Config.Save();
+                    ChatWindow.AppendAssistant($"[voice] rate={r}");
+                }
+                break;
+            case "vol":
+            case "volume":
+                {
+                    if (!int.TryParse(rest, out var v)) { ChatWindow.AppendAssistant("[voice] vol 0..100"); break; }
+                    v = Math.Clamp(v, 0, 100);
+                    Config.VoiceVolume = v; Config.Save();
+                    ChatWindow.AppendAssistant($"[voice] volume={v}");
+                }
+                break;
+            case "test":
+                {
+                    if (string.IsNullOrWhiteSpace(rest)) rest = "Every note is a tether… every soul, a string.";
+                    Voice?.Speak(rest, force: true);
+                    ChatWindow.AppendAssistant("[voice] test speaking.");
+                }
+                break;
+            default:
+                ChatWindow.AppendAssistant("Usage: /nunuvoice list | set <name> | rate <n> | vol <0-100> | on | off | test <text>");
+                break;
+        }
+    }
+
     private void OnCommand(string command, string args)
     {
         var trimmed = args?.Trim() ?? string.Empty;
@@ -371,7 +437,7 @@ public sealed class PluginMain : IDalamudPlugin
     {
         if (_isStreaming) _cts?.Cancel();
         _isStreaming = true;
-        _cts = new CancellationTokenSource(); // infinite by default
+        _cts = new CancellationTokenSource(); // infinite; cancel manually
 
         var full = new StringBuilder();
 
@@ -383,7 +449,6 @@ public sealed class PluginMain : IDalamudPlugin
 
                 var chunk = delta;
 
-                // Inline tool-call: <<search: query>>
                 int markerStart = chunk.IndexOf("<<search:", StringComparison.OrdinalIgnoreCase);
                 if (markerStart >= 0)
                 {
@@ -428,6 +493,8 @@ public sealed class PluginMain : IDalamudPlugin
                 _history.Add(("assistant", reply));
                 if (Memory?.Enabled == true) Memory.Append("assistant", reply, topic: "chat");
 
+                try { Voice?.Speak(reply); } catch { }
+
                 if (_broadcaster?.Enabled == true)
                     _broadcaster.Enqueue(_echoChannel, reply);
             }
@@ -446,6 +513,7 @@ public sealed class PluginMain : IDalamudPlugin
     {
         try { _cts?.Cancel(); } catch { }
         try { Memory?.Flush(); } catch { }
+        try { Voice?.Dispose(); } catch { }
         _listener?.Dispose();
         _broadcaster?.Dispose();
         _ipcRelay?.Dispose();
@@ -464,6 +532,7 @@ public sealed class PluginMain : IDalamudPlugin
         CommandManager.RemoveHandler(IpcBindCommand);
         CommandManager.RemoveHandler(IpcPrefCommand);
         CommandManager.RemoveHandler(RehookCommand);
+        CommandManager.RemoveHandler(VoiceCommand);
 
         _http.Dispose();
         Log.Information("[Nunu] Plugin disposed.");

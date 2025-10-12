@@ -25,6 +25,8 @@ public sealed class MemoryService
     private readonly object _gate = new();
 
     public bool Enabled => _enabled;
+    public string StorageDirectory => _dir;
+    public string StorageFile => _filePath;
 
     public MemoryService(string configDir, int maxEntries, bool enabled)
     {
@@ -35,9 +37,6 @@ public sealed class MemoryService
         Directory.CreateDirectory(_dir);
         _filePath = Path.Combine(_dir, "memory.jsonl");
     }
-
-    public string StorageDirectory => _dir;
-    public string StorageFile => _filePath;
 
     public void Load()
     {
@@ -56,7 +55,7 @@ public sealed class MemoryService
                     if (e != null && !string.IsNullOrWhiteSpace(e.Content))
                         _entries.Add(e);
                 }
-                catch { /* skip bad line */ }
+                catch { }
             }
 
             if (_entries.Count > _maxEntries)
@@ -90,7 +89,7 @@ public sealed class MemoryService
                 if (fi.Exists && fi.Length > 10 * 1024 * 1024)
                     RewriteTailNoLock();
             }
-            catch { /* ignore IO errors */ }
+            catch { }
         }
     }
 
@@ -103,7 +102,6 @@ public sealed class MemoryService
         }
     }
 
-    /// <summary>Dangerous: wipes all persisted memories and in-memory cache.</summary>
     public void ClearAll()
     {
         if (!_enabled) return;
@@ -115,13 +113,12 @@ public sealed class MemoryService
                 if (File.Exists(_filePath))
                 {
                     var tmp = _filePath + ".wipe";
-                    using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None))
-                    { /* create empty file */ }
+                    using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None)) { }
                     File.Copy(tmp, _filePath, overwrite: true);
                     File.Delete(tmp);
                 }
             }
-            catch { /* best-effort */ }
+            catch { }
         }
     }
 

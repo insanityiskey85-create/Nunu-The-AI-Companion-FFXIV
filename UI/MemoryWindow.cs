@@ -1,9 +1,9 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.Numerics;
 using Dalamud.Interface.Windowing;
 using Dalamud.Bindings.ImGui;
 using NunuTheAICompanion.Services;
+using Dalamud.Plugin.Services;
 
 namespace NunuTheAICompanion.UI;
 
@@ -11,13 +11,13 @@ public sealed class MemoryWindow : Window
 {
     private readonly Configuration _cfg;
     private readonly MemoryService? _mem;
-    private readonly Dalamud.Plugin.Services.IPluginLog _log;
+    private readonly IPluginLog _log;
 
     private string _importPath = string.Empty;
     private string _exportPathShown = string.Empty;
     private Vector2 _tableSize = new(0, 360);
 
-    public MemoryWindow(Configuration cfg, MemoryService? mem, Dalamud.Plugin.Services.IPluginLog log)
+    public MemoryWindow(Configuration cfg, MemoryService? mem, IPluginLog log)
         : base("Nunu – Memories", ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse)
     {
         _cfg = cfg;
@@ -31,20 +31,13 @@ public sealed class MemoryWindow : Window
     {
         if (_mem is null)
         {
-            ImGui.TextColored(new Vector4(1, 0.6f, 0.6f, 1), "Memory service unavailable in this build.");
+            ImGui.TextColored(new System.Numerics.Vector4(1, 0.6f, 0.6f, 1), "Memory service unavailable in this build.");
             return;
         }
 
-        ImGui.TextUnformatted($"Durable Memory: {(_mem.Enabled ? "ENABLED" : "DISABLED")}");
-        if (_mem.Enabled)
-        {
-            ImGui.SameLine();
-            ImGui.TextDisabled($"({_mem.StorageFile})");
-        }
-
+        ImGui.TextUnformatted($"Durable Memory: {(_mem.Enabled ? "ENABLED" : "DISABLED")}  ({_mem.StorageFile})");
         ImGui.Separator();
 
-        // Controls
         if (ImGui.Button("Refresh"))
         {
             try { _mem.Load(); } catch (Exception ex) { _log.Error(ex, "Memory refresh error"); }
@@ -52,15 +45,8 @@ public sealed class MemoryWindow : Window
         ImGui.SameLine();
         if (ImGui.Button("Export"))
         {
-            try
-            {
-                _exportPathShown = _mem.ExportTo();
-            }
-            catch (Exception ex)
-            {
-                _exportPathShown = $"[export error] {ex.Message}";
-                _log.Error(ex, "Memory export error");
-            }
+            try { _exportPathShown = _mem.ExportTo(); }
+            catch (Exception ex) { _exportPathShown = $"[export error] {ex.Message}"; _log.Error(ex, "Memory export error"); }
         }
         ImGui.SameLine();
         if (ImGui.Button("Clear All"))
@@ -82,37 +68,20 @@ public sealed class MemoryWindow : Window
         ImGui.SameLine();
         if (ImGui.Button("Import (append)"))
         {
-            try
-            {
-                var count = _mem.ImportFrom(_importPath, keepExisting: true);
-                _exportPathShown = $"Imported {count} lines.";
-            }
-            catch (Exception ex)
-            {
-                _exportPathShown = $"[import error] {ex.Message}";
-                _log.Error(ex, "Memory import error");
-            }
+            try { var count = _mem.ImportFrom(_importPath, keepExisting: true); _exportPathShown = $"Imported {count} lines."; }
+            catch (Exception ex) { _exportPathShown = $"[import error] {ex.Message}"; _log.Error(ex, "Memory import error"); }
         }
         ImGui.SameLine();
         if (ImGui.Button("Import (replace)"))
         {
-            try
-            {
-                var count = _mem.ImportFrom(_importPath, keepExisting: false);
-                _exportPathShown = $"Replaced with {count} lines.";
-            }
-            catch (Exception ex)
-            {
-                _exportPathShown = $"[import error] {ex.Message}";
-                _log.Error(ex, "Memory import error");
-            }
+            try { var count = _mem.ImportFrom(_importPath, keepExisting: false); _exportPathShown = $"Replaced with {count} lines."; }
+            catch (Exception ex) { _exportPathShown = $"[import error] {ex.Message}"; _log.Error(ex, "Memory import error"); }
         }
 
         ImGui.Spacing();
         ImGui.Separator();
         ImGui.TextUnformatted("Recent entries (tail):");
 
-        // Table
         var entries = _mem.Snapshot();
         if (ImGui.BeginTable("mem_table", 4, ImGuiTableFlags.SizingStretchProp | ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY, _tableSize))
         {
