@@ -12,6 +12,7 @@ using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using NunuTheAICompanion.Interop;
 using NunuTheAICompanion.Services;
+using NunuTheAICompanion.Services.Songcraft;
 using NunuTheAICompanion.UI;
 
 namespace NunuTheAICompanion;
@@ -87,7 +88,11 @@ public sealed partial class PluginMain : IDalamudPlugin
         Memory = new MemoryService(cfgDir, Config.MemoryMaxEntries, Config.MemoryEnabled);
         Memory.Load();
 
-        // Voice (TTS)
+        
+        // Soul Threads + Songcraft init
+        InitializeSoulThreads(_http, Log);
+        InitializeSongcraft(Log);
+// Voice (TTS)
         try { Voice = new VoiceService(Config, Log); } catch (Exception ex) { Log.Error(ex, "[Voice] init failed"); }
 
         // Windows
@@ -423,17 +428,22 @@ public sealed partial class PluginMain : IDalamudPlugin
         else ChatWindow.AppendAssistant("[diag] Usage: /nunudebug on | off | mirror [on|off]");
     }
 
+    
     private void HandleUserSend(string text)
     {
-        _history.Add(("user", text));
-        if (Memory?.Enabled == true) Memory.Append("user", text, topic: "chat");
+        var author = string.IsNullOrWhiteSpace(Config.ChatDisplayName) ? "You" : Config.ChatDisplayName;
+        // Threaded memory append
+        try { OnUserUtterance(author, text, CancellationToken.None); } catch { _ = 0; }
 
         ChatWindow.BeginAssistantStream();
-        var request = _history.ToList();
+
+        // Build context from threads + recent, then include the current user turn last
+        var request = BuildContext(text, CancellationToken.None);
+        request.Add(("user", text));
+
         StreamAssistantAsync(request);
     }
-
-    private async void StreamAssistantAsync(List<(string role, string content)> request)
+private async void StreamAssistantAsync(List<(string role, string content)> request)
     {
         if (_isStreaming) _cts?.Cancel();
         _isStreaming = true;
@@ -491,12 +501,24 @@ public sealed partial class PluginMain : IDalamudPlugin
             if (!string.IsNullOrEmpty(reply))
             {
                 _history.Add(("assistant", reply));
-                if (Memory?.Enabled == true) Memory.Append("assistant", reply, topic: "chat");
+                // Threaded memory append
+                try { OnAssistantReply("Nunu", reply, CancellationToken.None); } catch { if (Memory?.Enabled == true) Memory.Append("assistant", reply, topic: "chat"); }
 
+                // Voice
                 try { Voice?.Speak(reply); } catch { }
 
+                // Broadcast
                 if (_broadcaster?.Enabled == true)
                     _broadcaster.Enqueue(_echoChannel, reply);
+
+                // Songcraft (fire-and-forget)
+                try
+                {
+                    var path = TriggerSongcraft(reply, mood: null);
+                    if (!string.IsNullOrEmpty(path))
+                        ChatWindow.AppendAssistant($"[song] Saved: {path}");
+                }
+                catch { }
             }
         }
     }
