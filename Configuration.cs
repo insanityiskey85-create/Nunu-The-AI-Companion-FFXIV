@@ -6,7 +6,7 @@ using System.Collections.Generic;
 namespace NunuTheAICompanion;
 
 [Serializable]
-public partial class Configuration : IPluginConfiguration
+public class Configuration : IPluginConfiguration
 {
     public int Version { get; set; } = 4;
 
@@ -16,14 +16,14 @@ public partial class Configuration : IPluginConfiguration
     public string ModelName { get; set; } = "nunu-8b";
     public float Temperature { get; set; } = 0.7f;
     public string SystemPrompt { get; set; } =
-        "You are Little Nunu, the Soul Weeper—helpful, concise, kind, and in-universe for FFXIV never break character, always speak proper English unless told to speak another language by Real Nunu.";
+        "You are Little Nunu, the Soul Weeper—helpful, concise, kind, and in-universe for FFXIV.";
     public int ChatStreamTimeoutSec { get; set; } = 0; // 0 = infinite (handled via CTS)
 
     // ===== Memory (durable) =====
     public bool MemoryEnabled { get; set; } = true;
-    public int MemoryMaxEntries { get; set; } = 20000;
+    public int MemoryMaxEntries { get; set; } = 200;
     public bool RestoreHistoryOnStartup { get; set; } = true;
-    public int HistoryLoadCount { get; set; } = 2000;
+    public int HistoryLoadCount { get; set; } = 20;
 
     // ===== Listening =====
     public bool ListenEnabled { get; set; } = true;
@@ -99,4 +99,9 @@ public partial class Configuration : IPluginConfiguration
     [NonSerialized] private IDalamudPluginInterface? _pi;
     public void Initialize(IDalamudPluginInterface pi) => _pi = pi;
     public void Save() => _pi?.SavePluginConfig(this);
+
+
+    // ===== Memory/Context =====
+    public int ContextTurns { get; set; } = 12;
+}
 }

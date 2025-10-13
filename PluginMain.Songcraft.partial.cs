@@ -8,9 +8,11 @@ namespace NunuTheAICompanion
     public partial class PluginMain
     {
         private SongcraftService? _songcraft;
+        private IPluginLog? _songLog;
 
         private void InitializeSongcraft(IPluginLog log)
         {
+            _songLog = log;
             try
             {
                 _songcraft = new SongcraftService(Config, log);
@@ -32,7 +34,7 @@ namespace NunuTheAICompanion
             }
             catch (Exception ex)
             {
-                _log.Error(ex, "[Songcraft] compose failed");
+                _songLog?.Error(ex, "[Songcraft] compose failed");
                 return null;
             }
         }
