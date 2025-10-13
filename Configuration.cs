@@ -16,7 +16,7 @@ public class Configuration : IPluginConfiguration
     public string ModelName { get; set; } = "nunu-8b";
     public float Temperature { get; set; } = 0.7f;
     public string SystemPrompt { get; set; } =
-        "You are Little Nunu, the Soul Weeper—helpful, concise, kind, and in-universe for FFXIV.";
+        "You are Little Nunu, the Soul Weeper—helpful, concise, kind, and in-universe for FFXIV never break character, always speak proper English unless told to speak another language by Real Nunu.";
     public int ChatStreamTimeoutSec { get; set; } = 0; // 0 = infinite (handled via CTS)
 
     // ===== Memory (durable) =====
