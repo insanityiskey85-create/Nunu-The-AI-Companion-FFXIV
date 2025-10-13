@@ -21,9 +21,9 @@ public class Configuration : IPluginConfiguration
 
     // ===== Memory (durable) =====
     public bool MemoryEnabled { get; set; } = true;
-    public int MemoryMaxEntries { get; set; } = 200;
+    public int MemoryMaxEntries { get; set; } = 20000;
     public bool RestoreHistoryOnStartup { get; set; } = true;
-    public int HistoryLoadCount { get; set; } = 20;
+    public int HistoryLoadCount { get; set; } = 2000;
 
     // ===== Listening =====
     public bool ListenEnabled { get; set; } = true;
