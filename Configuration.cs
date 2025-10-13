@@ -6,7 +6,7 @@ using System.Collections.Generic;
 namespace NunuTheAICompanion;
 
 [Serializable]
-public class Configuration : IPluginConfiguration
+public partial class Configuration : IPluginConfiguration
 {
     public int Version { get; set; } = 4;
 
@@ -103,5 +103,4 @@ public class Configuration : IPluginConfiguration
 
     // ===== Memory/Context =====
     public int ContextTurns { get; set; } = 12;
-}
 }
