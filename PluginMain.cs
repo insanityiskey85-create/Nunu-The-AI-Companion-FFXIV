@@ -16,7 +16,7 @@ using NunuTheAICompanion.UI;
 
 namespace NunuTheAICompanion;
 
-public sealed class PluginMain : IDalamudPlugin
+public sealed partial class PluginMain : IDalamudPlugin
 {
     public string Name => "Nunu The AI Companion";
 
