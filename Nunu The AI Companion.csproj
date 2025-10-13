@@ -13,18 +13,17 @@
 			C:\Users\insan\AppData\Roaming\XIVLauncher\addon\Hooks\dev\
 		</DalamudLibPath>
 	</PropertyGroup>
-	<ItemGroup>
-	  <Compile Remove="api.cs" />
-	  <Compile Remove="Chat.cs" />
-	</ItemGroup>
-
-	<!-- Pulls in System.Speech -->
+               <!-- Pulls in System.Speech -->
 	<ItemGroup>
 		<FrameworkReference Include="Microsoft.WindowsDesktop.App" />
 	</ItemGroup>
 	<ItemGroup>
 	  <None Include="api.cs" />
 	  <None Include="Chat.cs" />
+	</ItemGroup>
+	<ItemGroup>
+	  <Compile Remove="api.cs" />
+	  <Compile Remove="Chat.cs" />
 	</ItemGroup>
 	<ItemGroup>
 		<Reference Include="Dalamud">
