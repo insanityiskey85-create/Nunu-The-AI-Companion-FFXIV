@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
-using System.Numerics;
 using System.Net.Http;
+using System.Numerics;
 using System.Threading;
 using System.Threading.Tasks;
 using Dalamud.Game.Command;
@@ -20,7 +20,7 @@ public sealed partial class PluginMain : IDalamudPlugin
 {
     public string Name => "Nunu The AI Companion";
 
-    // Dalamud services
+    // ===== Dalamud services =====
     [PluginService] internal static IDalamudPluginInterface PluginInterface { get; private set; } = null!;
     [PluginService] internal static ICommandManager CommandManager { get; private set; } = null!;
     [PluginService] internal static IChatGui ChatGui { get; private set; } = null!;
@@ -29,24 +29,28 @@ public sealed partial class PluginMain : IDalamudPlugin
 
     public static PluginMain Instance { get; private set; } = null!;
 
-    // Core state
+    // ===== Core state =====
     internal Configuration Config { get; private set; } = null!;
     internal WindowSystem WindowSystem { get; } = new("NunuTheAICompanion");
+
     internal ChatWindow ChatWindow { get; private set; } = null!;
     internal ConfigWindow ConfigWindow { get; private set; } = null!;
     internal MemoryWindow? MemoryWindow { get; private set; }
     internal ImageWindow? ImageWindow { get; private set; }
+
     internal MemoryService Memory { get; private set; } = null!;
     internal VoiceService? Voice { get; private set; }
 
     private readonly HttpClient _http = new();
     private readonly List<(string role, string content)> _history = new();
+
     private ChatBroadcaster? _broadcaster;
     private IpcChatRelay? _ipcRelay;
     private ChatListener? _listener;
+
     private bool _isStreaming;
 
-    // Echo channel for broadcasted assistant lines
+    // Broadcast echo channel
     internal ChatBroadcaster.NunuChannel _echoChannel = ChatBroadcaster.NunuChannel.Party;
 
     // Commands
@@ -62,31 +66,34 @@ public sealed partial class PluginMain : IDalamudPlugin
     private static readonly HashSet<string> _songMoods = new(StringComparer.OrdinalIgnoreCase)
     { "sorrow", "light", "playful", "mystic", "battle", "triumph" };
 
+    // UI draw hooks
+    private bool _uiHooksBound;
+
     public PluginMain()
     {
         Instance = this;
 
-        // HTTP: infinite by default; cancel via CTS during streams
+        // HTTP timeout: we cancel via CTS during streaming
         _http.Timeout = Timeout.InfiniteTimeSpan;
 
-        // Config
+        // ---- Config
         Config = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
         Config.Initialize(PluginInterface);
 
-        // Memory
-        var cfgDir = System.IO.Path.Combine(
+        // ---- Memory
+        var storageRoot = System.IO.Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "NunuTheAICompanion", "Memories");
-        try { System.IO.Directory.CreateDirectory(cfgDir); } catch { /* ignore */ }
-        Memory = new MemoryService(cfgDir, maxEntries: 1024, enabled: true);
+            "NunuTheAICompanion");
+        try { System.IO.Directory.CreateDirectory(storageRoot); } catch { }
+        Memory = new MemoryService(storageRoot, maxEntries: 1024, enabled: true);
         Memory.Load();
 
-        // Voice (optional)
+        // ---- Voice (optional)
         try { Voice = new VoiceService(Config, Log); }
         catch (Exception ex) { Log.Error(ex, "[Voice] init failed"); }
 
-        // Windows
-        ChatWindow = new ChatWindow(Config) { /* caller may set size externally */ };
+        // ---- Windows
+        ChatWindow = new ChatWindow(Config);
         ChatWindow.OnSend += HandleUserSend;
         WindowSystem.AddWindow(ChatWindow);
 
@@ -98,9 +105,21 @@ public sealed partial class PluginMain : IDalamudPlugin
             MemoryWindow = new MemoryWindow(Config, Memory, Log);
             WindowSystem.AddWindow(MemoryWindow);
         }
-        catch { /* optional */ }
+        catch { /* optional window; ignore if ctor differs */ }
 
-        // Broadcaster (outbound chat)
+        // ---- UiBuilder hooks (REQUIRED for windows to render)
+        if (!_uiHooksBound)
+        {
+            PluginInterface.UiBuilder.Draw += DrawUi;
+            PluginInterface.UiBuilder.OpenConfigUi += OpenConfigUi;
+            PluginInterface.UiBuilder.OpenMainUi += OpenMainUi;
+            _uiHooksBound = true;
+        }
+
+        if (Config.StartOpen)
+            ChatWindow.IsOpen = true;
+
+        // ---- Broadcaster (chat output)
         _broadcaster = new ChatBroadcaster(CommandManager, Framework, Log)
         {
             Enabled = true
@@ -108,7 +127,7 @@ public sealed partial class PluginMain : IDalamudPlugin
         NativeChatSender.Initialize(this, PluginInterface, Log);
         _broadcaster.SetNativeSender(full => NativeChatSender.TrySendFull(full));
 
-        // IPC relay
+        // ---- IPC relay (optional)
         _ipcRelay = new IpcChatRelay(PluginInterface, Log);
         if (!string.IsNullOrWhiteSpace(Config.IpcChannelName))
         {
@@ -119,21 +138,20 @@ public sealed partial class PluginMain : IDalamudPlugin
         }
         _broadcaster.SetIpcRelay(_ipcRelay, Config.PreferIpcRelay);
 
-        // Commands
+        // ---- Commands
         CommandManager.AddHandler(Command, new CommandInfo(OnCommand)
         {
             HelpMessage = "Toggle Nunu. '/nunu config' opens settings. '/nunu memory' opens memories."
         });
 
-        // Listener (inbound chat)
+        // ---- Listener (inbound chat)
         RehookListener();
 
-        // Soul Threads + Songcraft
+        // ---- Soul Threads + Songcraft
         InitializeSoulThreads(_http, Log);
         InitializeSongcraft(Log);
 
-        // Greeting
-        if (Config.StartOpen) ChatWindow.IsOpen = true;
+        // ---- Greeting
         ChatWindow.AppendAssistant("Nunu is awake. Ask me anything—or play me a memory.");
     }
 
@@ -144,14 +162,30 @@ public sealed partial class PluginMain : IDalamudPlugin
         try { _ipcRelay?.Dispose(); } catch { }
         try { Voice?.Dispose(); } catch { }
 
+        try
+        {
+            if (_uiHooksBound)
+            {
+                PluginInterface.UiBuilder.Draw -= DrawUi;
+                PluginInterface.UiBuilder.OpenConfigUi -= OpenConfigUi;
+                PluginInterface.UiBuilder.OpenMainUi -= OpenMainUi;
+                _uiHooksBound = false;
+            }
+        }
+        catch { }
+
         try { CommandManager.RemoveHandler(Command); } catch { }
         try { WindowSystem.RemoveAllWindows(); } catch { }
 
         try { Memory.Flush(); } catch { }
     }
 
-    // ========= Commands =========
+    // ===== UiBuilder handlers =====
+    private void DrawUi() => WindowSystem.Draw();
+    private void OpenConfigUi() => ConfigWindow.IsOpen = true;
+    private void OpenMainUi() => ChatWindow.IsOpen = true;
 
+    // ===== Command handler =====
     private void OnCommand(string cmd, string args)
     {
         args = (args ?? string.Empty).Trim().ToLowerInvariant();
@@ -161,8 +195,7 @@ public sealed partial class PluginMain : IDalamudPlugin
         ChatWindow.IsOpen = !ChatWindow.IsOpen;
     }
 
-    // ========= Listener boot / rehook =========
-
+    // ===== Listener boot / rehook =====
     /// <summary>Recreate the chat listener using the current configuration.</summary>
     public void RehookListener()
     {
@@ -178,8 +211,7 @@ public sealed partial class PluginMain : IDalamudPlugin
         Log.Info("[Listener] rehooked with latest configuration.");
     }
 
-    // ========= Inbound path =========
-
+    // ===== Inbound path =====
     private void OnHeardFromChat(string author, string text)
     {
         // Bard-Call early exit (/song …) before LLM
@@ -193,21 +225,20 @@ public sealed partial class PluginMain : IDalamudPlugin
     {
         var author = string.IsNullOrWhiteSpace(Config.ChatDisplayName) ? "You" : Config.ChatDisplayName;
 
-        // Threaded memory append for user line
+        // Persist the user line (threaded if available)
         try { OnUserUtterance(author, text, CancellationToken.None); } catch { /* fallback later */ }
 
-        // Begin UI stream
+        // Begin UI streaming
         ChatWindow.BeginAssistantStream();
 
-        // Build smart context (thread + recents), then add current user turn
+        // Build context (thread + recents) then add the current turn
         var request = BuildContext(text, CancellationToken.None);
         request.Add(("user", text));
 
         _ = StreamAssistantAsync(request);
     }
 
-    // ========= Streaming model loop =========
-
+    // ===== Streaming model loop =====
     private async Task StreamAssistantAsync(List<(string role, string content)> history)
     {
         if (_isStreaming) return;
@@ -226,7 +257,7 @@ public sealed partial class PluginMain : IDalamudPlugin
             await foreach (var chunk in client.StreamChatAsync(Config.BackendUrl, chat, cts.Token))
             {
                 reply += chunk;
-                ChatWindow.AppendAssistantDelta(chunk); // stream delta
+                ChatWindow.AppendAssistantDelta(chunk); // stream deltas to UI
             }
 
             ChatWindow.EndAssistantStream();
@@ -235,18 +266,18 @@ public sealed partial class PluginMain : IDalamudPlugin
             {
                 _history.Add(("assistant", reply));
 
-                // Threaded memory append; safe fallback to linear
+                // Persist assistant line (threaded if available)
                 try { OnAssistantReply("Nunu", reply, CancellationToken.None); }
                 catch { if (Memory.Enabled) Memory.Append("assistant", reply, topic: "chat"); }
 
-                // Voice
+                // TTS
                 try { Voice?.Speak(reply); } catch { }
 
-                // Broadcast
+                // Broadcast to chat
                 if (_broadcaster?.Enabled == true)
                     _broadcaster.Enqueue(_echoChannel, reply);
 
-                // Songcraft (fire-and-forget)
+                // Songcraft composition (fire-and-forget)
                 try
                 {
                     var path = TriggerSongcraft(reply, mood: null);
@@ -269,8 +300,7 @@ public sealed partial class PluginMain : IDalamudPlugin
         }
     }
 
-    // ========= Soul Threads =========
-
+    // ===== Soul Threads =====
     private void InitializeSoulThreads(HttpClient http, IPluginLog log)
     {
         try
@@ -309,8 +339,7 @@ public sealed partial class PluginMain : IDalamudPlugin
         _threads.AppendAndThread("assistant", reply, author, token);
     }
 
-    // ========= Songcraft =========
-
+    // ===== Songcraft =====
     private void InitializeSongcraft(IPluginLog log)
     {
         _songLog = log;
@@ -328,7 +357,9 @@ public sealed partial class PluginMain : IDalamudPlugin
     public string? TriggerSongcraft(string text, string? mood = null)
     {
         if (!Config.SongcraftEnabled || _songcraft is null) return null;
-        var dir = string.IsNullOrWhiteSpace(Config.SongcraftSaveDir) ? Memory.StorageDirectory : Config.SongcraftSaveDir!;
+        var dir = string.IsNullOrWhiteSpace(Config.SongcraftSaveDir)
+            ? Memory.StorageDirectory
+            : Config.SongcraftSaveDir!;
         try
         {
             return _songcraft.ComposeToFile(text, mood, dir, "nunu_song");
@@ -340,8 +371,7 @@ public sealed partial class PluginMain : IDalamudPlugin
         }
     }
 
-    // ========= Bard-Call (/song …) =========
-
+    // ===== Bard-Call (/song …) =====
     public bool TryHandleBardCall(string author, string text)
     {
         if (!Config.SongcraftEnabled || _songcraft is null) return false;
