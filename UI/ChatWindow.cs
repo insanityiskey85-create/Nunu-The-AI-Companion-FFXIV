@@ -8,19 +8,22 @@ namespace NunuTheAICompanion.UI;
 
 /// <summary>
 /// Minimal chat UI window with streaming helpers.
-/// Includes back-compat shims used by earlier patches
+/// Includes back-compat shims used by older patches
 /// (AppendSystem, AddSystemLine, AppendAssistantStream).
 /// </summary>
 public sealed class ChatWindow : Window
 {
     private readonly Configuration _cfg;
 
-    // Simple transcript buffer; you can replace with a richer log model
+    // Simple transcript buffer; replace with a richer log model if desired.
     private readonly List<string> _lines = new();
 
     // Streaming state
     private bool _streaming;
     private string _streamBuffer = string.Empty;
+
+    // Input buffer (basic, not persistent between frames)
+    private string _input = string.Empty;
 
     public event Action<string>? OnSend;
 
@@ -28,40 +31,39 @@ public sealed class ChatWindow : Window
         : base("Little Nunu — The Soul Weeper", ImGuiWindowFlags.None, true)
     {
         _cfg = cfg;
-        // reasonable default size; caller can overwrite via property
-        this.SizeConstraints = new WindowSizeConstraints
+
+        // Default window constraints; caller can still set Window.Size outside.
+        SizeConstraints = new WindowSizeConstraints
         {
             MinimumSize = new Vector2(520, 320),
             MaximumSize = new Vector2(float.MaxValue, float.MaxValue)
         };
     }
 
-    /// <summary>External code may set an initial size.</summary>
-    public Vector2 Size
-    {
-        set { this.SizeCondition = ImGuiCond.Appearing; this.Size = value; }
-    }
-
     // ========= Public helpers used by PluginMain =========
 
+    /// <summary>Add a completed assistant line to the transcript.</summary>
     public void AppendAssistant(string text)
     {
-        if (string.IsNullOrEmpty(text)) return;
+        if (string.IsNullOrWhiteSpace(text)) return;
         _lines.Add(text);
     }
 
+    /// <summary>Begin a streaming assistant response.</summary>
     public void BeginAssistantStream()
     {
         _streaming = true;
         _streamBuffer = string.Empty;
     }
 
+    /// <summary>Append a delta chunk during streaming.</summary>
     public void AppendAssistantDelta(string delta)
     {
         if (!_streaming || string.IsNullOrEmpty(delta)) return;
         _streamBuffer += delta;
     }
 
+    /// <summary>End streaming and commit the buffered text.</summary>
     public void EndAssistantStream()
     {
         if (!_streaming) return;
@@ -74,7 +76,7 @@ public sealed class ChatWindow : Window
         }
     }
 
-    // ========= Back-compat shims (called by earlier patches) =========
+    // ========= Back-compat shims (used by some patches) =========
 
     /// <summary>Treat “system” lines the same as assistant lines in UI.</summary>
     public void AppendSystem(string text) => AppendAssistant(text);
@@ -85,32 +87,50 @@ public sealed class ChatWindow : Window
     /// <summary>Alias used by some patches for streaming deltas.</summary>
     public void AppendAssistantStream(string delta) => AppendAssistantDelta(delta);
 
+    // ========= Drawing =========
+
     public override void Draw()
     {
-        // Render transcript
-        ImGui.BeginChild("nunu_chat_scroll", new Vector2(0, -40), true);
-        foreach (var line in _lines)
-        {
-            ImGui.TextWrapped(line);
-            ImGui.Separator();
-        }
+        // Optional opacity (simple multiplier on style alpha)
+        var alpha = ImGui.GetStyle().Alpha;
+        if (_cfg.WindowOpacity >= 0f && _cfg.WindowOpacity <= 1f)
+            ImGui.GetStyle().Alpha = _cfg.WindowOpacity;
 
-        if (_streaming && !string.IsNullOrEmpty(_streamBuffer))
+        try
         {
-            ImGui.TextWrapped(_streamBuffer + "█");
-        }
-        ImGui.EndChild();
+            // Transcript area
+            ImGui.BeginChild("nunu_chat_scroll", new Vector2(0, -40), true);
+            foreach (var line in _lines)
+            {
+                ImGui.TextWrapped(line);
+                ImGui.Separator();
+            }
 
-        // Input row (very simple)
-        ImGui.PushItemWidth(-130);
-        string input = string.Empty;
-        ImGui.InputText("##nunu_input", ref input, 1024);
-        ImGui.SameLine();
-        if (ImGui.Button("Send", new Vector2(120, 0)))
-        {
-            if (!string.IsNullOrWhiteSpace(input))
-                OnSend?.Invoke(input.Trim());
+            if (_streaming && !string.IsNullOrEmpty(_streamBuffer))
+            {
+                ImGui.TextWrapped(_streamBuffer + "█");
+            }
+            ImGui.EndChild();
+
+            // Input row
+            ImGui.PushItemWidth(-130);
+            ImGui.InputText("##nunu_input", ref _input, 2048);
+            ImGui.SameLine();
+            if (ImGui.Button("Send", new Vector2(120, 0)))
+            {
+                var text = _input?.Trim();
+                if (!string.IsNullOrEmpty(text))
+                {
+                    OnSend?.Invoke(text);
+                    _input = string.Empty;
+                }
+            }
+            ImGui.PopItemWidth();
         }
-        ImGui.PopItemWidth();
+        finally
+        {
+            // restore alpha
+            ImGui.GetStyle().Alpha = alpha;
+        }
     }
 }
