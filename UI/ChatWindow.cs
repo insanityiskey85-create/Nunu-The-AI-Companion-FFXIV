@@ -1,9 +1,9 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Text;
 using System.Numerics;
-using Dalamud.Interface.Windowing;
+using System.Text;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Interface.Windowing;
 
 namespace NunuTheAICompanion.UI
 {
@@ -13,6 +13,8 @@ namespace NunuTheAICompanion.UI
 
         private string _input = string.Empty;
         private readonly List<(string role, string content)> _history = new();
+
+        // Streaming buffer
         private bool _isStreaming;
         private readonly StringBuilder _streamBuf = new();
 
@@ -41,82 +43,89 @@ namespace NunuTheAICompanion.UI
             DrawToolbar();
             ImGui.Separator();
 
-            if (_cfg.TwoPaneMode) DrawTwoPaneLayout();
-            else DrawSinglePaneLayout();
+            if (_cfg.TwoPaneMode) DrawTwoPane();
+            else DrawOnePane();
 
             ImGui.Separator();
-            DrawInputBar();
+            DrawInput();
         }
 
+        // ==================== Toolbar ====================
         private void DrawToolbar()
         {
             ImGui.TextDisabled("Speak, and I shall sing it back.");
             var avail = ImGui.GetContentRegionAvail();
-            ImGui.SameLine(avail.X - 280);
+            ImGui.SameLine(Math.Max(0, avail.X - 280));
 
             bool tp = _cfg.TwoPaneMode;
             if (ImGui.Checkbox("Two-Pane", ref tp)) { _cfg.TwoPaneMode = tp; _cfg.Save(); }
 
             ImGui.SameLine();
-            bool copyBtn = _cfg.ShowCopyButtons;
-            if (ImGui.Checkbox("Copy Buttons", ref copyBtn)) { _cfg.ShowCopyButtons = copyBtn; _cfg.Save(); }
+            bool copy = _cfg.ShowCopyButtons;
+            if (ImGui.Checkbox("Copy Buttons", ref copy)) { _cfg.ShowCopyButtons = copy; _cfg.Save(); }
 
             ImGui.SameLine();
             float op = _cfg.WindowOpacity;
             if (ImGui.SliderFloat("Opacity", ref op, 0.25f, 1.0f)) { _cfg.WindowOpacity = op; _cfg.Save(); }
         }
 
-        private void DrawTwoPaneLayout()
+        // ==================== Layouts ====================
+        private void DrawTwoPane()
         {
             var full = ImGui.GetContentRegionAvail();
-            var colGap = 10f;
-            var colWidth = (full.X - colGap) * 0.5f;
+            var gap = 10f;
+            var colWidth = (full.X - gap) * 0.5f;
             var height = MathF.Max(100f, full.Y - 80f);
 
-            // Left pane — user
+            // Left (user)
             ImGui.BeginChild("pane_user", new Vector2(colWidth, height), true, ImGuiWindowFlags.HorizontalScrollbar);
             foreach (var (role, content) in _history)
                 if (role == "user") DrawBubble(role, content);
             if (_scrollLeftToBottom) { ImGui.SetScrollHereY(1.0f); _scrollLeftToBottom = false; }
             ImGui.EndChild();
 
-            ImGui.SameLine(); ImGui.Dummy(new Vector2(colGap, 1)); ImGui.SameLine();
+            ImGui.SameLine(); ImGui.Dummy(new Vector2(gap, 1)); ImGui.SameLine();
 
-            // Right pane — assistant + system (+stream)
+            // Right (assistant + system + stream)
             ImGui.BeginChild("pane_assistant", new Vector2(colWidth, height), true, ImGuiWindowFlags.HorizontalScrollbar);
             foreach (var (role, content) in _history)
                 if (role is "assistant" or "system") DrawBubble(role, content);
 
-            if (_isStreaming) DrawBubble("assistant", _streamBuf.ToString(), streaming: true);
+            if (_isStreaming)
+                DrawBubble("assistant", _streamBuf.ToString(), streaming: true);
 
             if (_scrollRightToBottom) { ImGui.SetScrollHereY(1.0f); _scrollRightToBottom = false; }
             ImGui.EndChild();
         }
 
-        private void DrawSinglePaneLayout()
+        private void DrawOnePane()
         {
             var full = ImGui.GetContentRegionAvail();
             var height = MathF.Max(120f, full.Y - 80f);
 
             ImGui.BeginChild("pane_single", new Vector2(-1, height), true, ImGuiWindowFlags.HorizontalScrollbar);
             foreach (var (role, content) in _history) DrawBubble(role, content);
-            if (_isStreaming) DrawBubble("assistant", _streamBuf.ToString(), streaming: true);
+            if (_isStreaming)
+                DrawBubble("assistant", _streamBuf.ToString(), streaming: true);
+
             if (_isStreaming || _scrollRightToBottom) { ImGui.SetScrollHereY(1.0f); _scrollRightToBottom = false; }
             ImGui.EndChild();
         }
 
-        private void DrawInputBar()
+        // ==================== Input ====================
+        private void DrawInput()
         {
             var avail = ImGui.GetContentRegionAvail();
-            var btnWidth = 100f;
-            var inputWidth = MathF.Max(200f, avail.X - btnWidth - 8f);
+            var btnW = 100f;
+            var inputW = MathF.Max(200f, avail.X - btnW - 8f);
 
-            ImGui.PushItemWidth(inputWidth);
-            if (InputTextLineUtf8("##nunu_input", ref _input)) { /* updated */ }
+            ImGui.PushItemWidth(inputW);
+            if (InputTextLineUtf8("##nunu_input", ref _input)) { /* live update ok */ }
             ImGui.PopItemWidth();
 
             ImGui.SameLine();
-            if (ImGui.Button("Send", new Vector2(btnWidth, 0))) TrySend();
+            if (ImGui.Button("Send", new Vector2(btnW, 0)))
+                TrySend();
 
             if (ImGui.IsKeyPressed(ImGuiKey.Enter) && !ImGui.IsKeyDown(ImGuiKey.ModShift))
                 TrySend();
@@ -129,14 +138,14 @@ namespace NunuTheAICompanion.UI
 
             _history.Add(("user", text));
             _scrollLeftToBottom = true;
-
             OnSend?.Invoke(text);
             _input = string.Empty;
         }
 
+        // ==================== Bubbles ====================
         private void DrawBubble(string role, string content, bool streaming = false)
         {
-            var header = role switch
+            var who = role switch
             {
                 "user" => "You",
                 "assistant" => "Nunu",
@@ -144,12 +153,13 @@ namespace NunuTheAICompanion.UI
                 _ => role
             };
 
-            ImGui.PushID($"{role}:{content.GetHashCode()}:{streaming}");
+            ImGui.PushID($"{role}:{content.GetHashCode()}:{(streaming ? 1 : 0)}");
 
-            ImGui.TextColored(role == "system" ? new Vector4(0.7f, 0.7f, 0.85f, 1f)
-                                               : role == "assistant" ? new Vector4(0.9f, 0.8f, 0.95f, 1f)
-                                                                     : new Vector4(0.8f, 0.9f, 1f, 1f),
-                              header);
+            var color = role == "system" ? new Vector4(0.7f, 0.7f, 0.85f, 1f)
+                      : role == "assistant" ? new Vector4(0.9f, 0.8f, 0.95f, 1f)
+                                            : new Vector4(0.8f, 0.9f, 1f, 1f);
+
+            ImGui.TextColored(color, who);
 
             if (_cfg.ShowCopyButtons)
             {
@@ -167,13 +177,17 @@ namespace NunuTheAICompanion.UI
             ImGui.PopTextWrapPos();
             ImGui.EndGroup();
 
-            if (streaming) { ImGui.SameLine(); ImGui.TextDisabled(" …"); }
+            if (streaming)
+            {
+                ImGui.SameLine();
+                ImGui.TextDisabled("♪");
+            }
 
             ImGui.Spacing();
             ImGui.PopID();
         }
 
-        // -------- Public API (used by PluginMain) --------
+        // ==================== Public API ====================
         public void AppendAssistant(string text)
         {
             if (string.IsNullOrEmpty(text)) return;
@@ -208,6 +222,7 @@ namespace NunuTheAICompanion.UI
         {
             if (!_isStreaming) return;
             _isStreaming = false;
+
             var final = _streamBuf.ToString();
             _streamBuf.Clear();
             if (!string.IsNullOrEmpty(final))
@@ -217,7 +232,7 @@ namespace NunuTheAICompanion.UI
             }
         }
 
-        // -------- Utilities --------
+        // ==================== Helpers ====================
         private static string StripNonAscii(string s)
         {
             if (string.IsNullOrEmpty(s)) return s;
@@ -226,7 +241,7 @@ namespace NunuTheAICompanion.UI
             return sb.ToString();
         }
 
-        // UTF-8 single-line input helper (Dalamud.Bindings.ImGui uses byte[] buffers)
+        // Dalamud.Bindings.ImGui -> UTF-8 buffer single-line input
         private static readonly int LineBufMin = 1024;
 
         private static bool InputTextLineUtf8(string label, ref string text)
@@ -242,7 +257,7 @@ namespace NunuTheAICompanion.UI
             var buf = new byte[size];
             if (!string.IsNullOrEmpty(s))
             {
-                var src = System.Text.Encoding.UTF8.GetBytes(s);
+                var src = Encoding.UTF8.GetBytes(s);
                 var len = Math.Min(src.Length, size - 1);
                 Array.Copy(src, buf, len);
                 buf[len] = 0;
@@ -255,7 +270,7 @@ namespace NunuTheAICompanion.UI
         {
             var len = Array.IndexOf(buf, (byte)0);
             if (len < 0) len = buf.Length;
-            return System.Text.Encoding.UTF8.GetString(buf, 0, len);
+            return Encoding.UTF8.GetString(buf, 0, len);
         }
     }
 }
