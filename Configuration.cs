@@ -1,10 +1,13 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using Dalamud.Plugin;
 
 namespace NunuTheAICompanion;
 
 public sealed class Configuration : Dalamud.Configuration.IPluginConfiguration
 {
-    public int Version { get; set; } = 3;
+    public int Version { get; set; } = 4;
 
     // -------- Backend --------
     public string BackendMode { get; set; } = "ollama";
@@ -56,6 +59,11 @@ public sealed class Configuration : Dalamud.Configuration.IPluginConfiguration
     public bool RequireCallsign { get; set; } = false;
     public string Callsign { get; set; } = "@nunu";
 
+    // ---- Whitelist for allowed authors (by player name) ----
+    // Empty list = allow all (subject to other listen rules).
+    // Comparison is case-insensitive; you can fill via UI or /nunu set.
+    public List<string> Whitelist { get; set; } = new List<string>();
+
     // -------- Broadcast & IPC --------
     public bool BroadcastAsPersona { get; set; } = true;
     public string PersonaName { get; set; } = "Little Nunu";
@@ -100,13 +108,37 @@ public sealed class Configuration : Dalamud.Configuration.IPluginConfiguration
     public bool DebugMirrorToWindow { get; set; } = false;
     public bool DebugListen { get; set; } = false;
 
-    [System.NonSerialized] private IDalamudPluginInterface? _pi;
+    [NonSerialized] private IDalamudPluginInterface? _pi;
 
     public void Initialize(IDalamudPluginInterface pi)
     {
         _pi = pi;
         _pi.UiBuilder.DisableUserUiHide = false;
+        // Normalize whitelist to a consistent form
+        NormalizeWhitelist();
     }
 
-    public void Save() => _pi?.SavePluginConfig(this);
+    public void Save()
+    {
+        NormalizeWhitelist();
+        _pi?.SavePluginConfig(this);
+    }
+
+    // --- Helpers ---
+    private void NormalizeWhitelist()
+    {
+        if (Whitelist == null) { Whitelist = new List<string>(); return; }
+        // trim empties and normalize casing
+        Whitelist = Whitelist
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Select(s => s.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    public bool IsWhitelisted(string author)
+    {
+        if (Whitelist == null || Whitelist.Count == 0) return true; // empty = allow all
+        return Whitelist.Contains(author?.Trim() ?? string.Empty, StringComparer.OrdinalIgnoreCase);
+    }
 }
