@@ -1,152 +1,112 @@
-using Dalamud.Configuration;
 using Dalamud.Plugin;
-using System;
-using System.Collections.Generic;
-using System.Text.Json.Serialization;
 
 namespace NunuTheAICompanion;
 
-/// <summary>
-/// Central plugin configuration for Little Nunu.
-/// Includes all fields used by PluginMain, ConfigWindow, Soul Threads, Songcraft, Search, Voice, IPC, and Image UI.
-/// </summary>
-[Serializable]
-public class Configuration : IPluginConfiguration
+public sealed class Configuration : Dalamud.Configuration.IPluginConfiguration
 {
-    public int Version { get; set; } = 4;
+    public int Version { get; set; } = 3;
 
-    // ===== Backend (chat / LLM) =====
-    /// <summary>Backend mode label (e.g., "ollama").</summary>
+    // -------- Backend --------
     public string BackendMode { get; set; } = "ollama";
-
-    /// <summary>Ollama-compatible chat endpoint (e.g., http://127.0.0.1:11434/api/chat).</summary>
     public string BackendUrl { get; set; } = "http://127.0.0.1:11434/api/chat";
-
-    /// <summary>Model name for the backend.</summary>
-    public string ModelName { get; set; } = "nunu-8b";
-
-    /// <summary>Sampling temperature (0..2 typical).</summary>
+    public string ModelName { get; set; } = "nunu";
     public float Temperature { get; set; } = 0.7f;
-
-    /// <summary>Optional system prompt injected before history.</summary>
     public string SystemPrompt { get; set; } =
-        "You are Little Nunu, the void-touched Lalafell bard—mischievous, empathetic, and lore-bound to Eorzea.";
+        "You are Little Nunu, the Soul Weeper. Stay in FFXIV voice; be helpful and kind.";
+    public string ChatDisplayName { get; set; } = "You";
 
-    /// <summary>
-    /// Back-compat alias used by some helpers (e.g., EmbeddingClient).
-    /// Maps to BackendUrl so older code compiles without refactor.
-    /// </summary>
-    [JsonIgnore]
-    public string ChatEndpointUrl
-    {
-        get => BackendUrl;
-        set => BackendUrl = value;
-    }
+    // --- Endpoints (compat with older services) ---
+    public string ChatEndpointUrl { get; set; } = "http://127.0.0.1:11434/api/chat";
+    public string EmbeddingEndpointUrl { get; set; } = "http://127.0.0.1:11434/api/embeddings";
 
-    // ===== Memory & Soul Threads =====
-    /// <summary>How many recent turns to include alongside thread context.</summary>
-    public int ContextTurns { get; set; } = 12;
-
-    /// <summary>Enable topic-aware memory (embeddings + clustering).</summary>
+    // -------- Memory / Soul Threads --------
     public bool SoulThreadsEnabled { get; set; } = true;
-
-    /// <summary>Embedding model name for Ollama /api/embeddings.</summary>
+    public int ContextTurns { get; set; } = 12;
     public string? EmbeddingModel { get; set; } = "nomic-embed-text";
+    public float ThreadSimilarityThreshold { get; set; } = 0.72f;
+    public int ThreadContextMaxFromThread { get; set; } = 8;
+    public int ThreadContextMaxRecent { get; set; } = 4;
 
-    /// <summary>Cosine similarity threshold for creating new threads.</summary>
-    public float ThreadSimilarityThreshold { get; set; } = 0.78f;
-
-    /// <summary>Max entries pulled from the best-matching thread.</summary>
-    public int ThreadContextMaxFromThread { get; set; } = 6;
-
-    /// <summary>Max recent entries always included for recency balance.</summary>
-    public int ThreadContextMaxRecent { get; set; } = 8;
-
-    // ===== Songcraft (MIDI generation) =====
+    // -------- Songcraft --------
     public bool SongcraftEnabled { get; set; } = true;
-    public string? SongcraftKey { get; set; } = "C4";
+    public string SongcraftBardCallTrigger { get; set; } = "/song";
+    public string SongcraftKey { get; set; } = "C4";
     public int SongcraftTempoBpm { get; set; } = 96;
     public int SongcraftBars { get; set; } = 8;
-    public int SongcraftProgram { get; set; } = 24; // Nylon Guitar
-    public string? SongcraftSaveDir { get; set; } = null; // null => Memories dir
-    public string? SongcraftBardCallTrigger { get; set; } = "/song";
+    public int SongcraftProgram { get; set; } = 0; // GM program 0..127
+    public string? SongcraftSaveDir { get; set; } = null;
 
-    // ===== Voice (TTS) =====
-    public bool VoiceSpeakEnabled { get; set; } = true;
-    public string? VoiceName { get; set; } = "";
-    public int VoiceRate { get; set; } = 0;       // -10..10
-    public int VoiceVolume { get; set; } = 100;   // 0..100
+    // -------- Voice --------
+    public bool VoiceSpeakEnabled { get; set; } = false;
+    public string? VoiceName { get; set; }
+    public int VoiceRate { get; set; } = 0;     // -10..10
+    public int VoiceVolume { get; set; } = 100; // 0..100
     public bool VoiceOnlyWhenWindowFocused { get; set; } = false;
 
-    // ===== Chat Listening (input) =====
+    // -------- Listen (inbound chat) --------
     public bool ListenEnabled { get; set; } = true;
-    public bool ListenSelf { get; set; } = true;
+    public bool ListenSelf { get; set; } = false;
     public bool ListenSay { get; set; } = true;
     public bool ListenTell { get; set; } = true;
     public bool ListenParty { get; set; } = true;
     public bool ListenAlliance { get; set; } = false;
-    public bool ListenFreeCompany { get; set; } = true;
+    public bool ListenFreeCompany { get; set; } = false;
     public bool ListenShout { get; set; } = false;
     public bool ListenYell { get; set; } = false;
-
-    /// <summary>If true, messages must contain Callsign to be heard.</summary>
     public bool RequireCallsign { get; set; } = false;
+    public string Callsign { get; set; } = "@nunu";
 
-    /// <summary>Callsign to trigger Nunu in chat (e.g., "@nunu").</summary>
-    public string Callsign { get; set; } = "@Little Nunu";
-
-    /// <summary>Optional whitelist of authors permitted to trigger Nunu.</summary>
-    public List<string>? Whitelist { get; set; } = new();
-
-    // ===== Chat Broadcast (output) =====
+    // -------- Broadcast & IPC --------
     public bool BroadcastAsPersona { get; set; } = true;
     public string PersonaName { get; set; } = "Little Nunu";
+    public string? IpcChannelName { get; set; } = string.Empty;
+    public bool PreferIpcRelay { get; set; } = true;
 
-    // ===== IPC Relay =====
-    public string? IpcChannelName { get; set; } = "";
-    public bool PreferIpcRelay { get; set; } = false;
+    // Preferred outgoing channel for broadcasts
+    // Values: Say, Party, Shout, Yell, Alliance, FreeCompany, Echo
+    public string EchoChannel { get; set; } = "Say";
 
-    // ===== Window / UI =====
-    public bool StartOpen { get; set; } = true;       // open ChatWindow on startup
-    public float WindowOpacity { get; set; } = 1.0f;   // 0..1
+    // -------- UI --------
+    public bool StartOpen { get; set; } = true;
+    public float WindowOpacity { get; set; } = 1.0f; // 0.25..1.0
     public bool AsciiSafe { get; set; } = false;
-    public bool TwoPaneMode { get; set; } = false;
+    public bool TwoPaneMode { get; set; } = true;
     public bool ShowCopyButtons { get; set; } = true;
-    public float FontScale { get; set; } = 1.0f;
+    public float FontScale { get; set; } = 1.0f; // 0.75..1.5
     public bool LockWindow { get; set; } = false;
-    public string ChatDisplayName { get; set; } = "You";
 
-    // ===== Debug =====
-    public bool DebugListen { get; set; } = false;
-    public bool DebugMirrorToWindow { get; set; } = true;
-
-    // ===== Web Search (optional) =====
-    public bool AllowInternet { get; set; } = false;
-    public string SearchBackend { get; set; } = "serpapi";
-    public string? SearchApiKey { get; set; } = "";
-    public int SearchMaxResults { get; set; } = 5;
-    public int SearchTimeoutSec { get; set; } = 15;
-
-    // ===== Image (text-to-image) =====
-    public string ImageBackend { get; set; } = "none";           // e.g., "a1111", "comfy", "none"
+    // -------- Images --------
+    public string ImageBackend { get; set; } = "none";
     public string ImageBaseUrl { get; set; } = "http://127.0.0.1:7860";
     public string ImageModel { get; set; } = "stable-diffusion-1.5";
     public int ImageSteps { get; set; } = 30;
-    public float ImageGuidance { get; set; } = 7.5f;             // CFG
+    public float ImageGuidance { get; set; } = 7.0f;
     public int ImageWidth { get; set; } = 768;
-    public int ImageHeight { get; set; } = 768;
+    public int ImageHeight { get; set; } = 512;
     public string ImageSampler { get; set; } = "Euler a";
-    public int ImageSeed { get; set; } = -1;                     // -1 => random
+    public int ImageSeed { get; set; } = -1;
     public int ImageTimeoutSec { get; set; } = 60;
     public bool SaveImages { get; set; } = true;
     public string ImageSaveSubdir { get; set; } = "Images";
 
-    // ===== Persistence =====
-    [NonSerialized] private IDalamudPluginInterface? _pi;
+    // -------- Search --------
+    public bool AllowInternet { get; set; } = false;
+    public string SearchBackend { get; set; } = "serpapi";
+    public string SearchApiKey { get; set; } = "";
+    public int SearchMaxResults { get; set; } = 5;
+    public int SearchTimeoutSec { get; set; } = 20;
 
-    /// <summary>Dalamud calls this to hand the plugin interface back to us.</summary>
-    public void Initialize(IDalamudPluginInterface pi) => _pi = pi;
+    // -------- Debug --------
+    public bool DebugMirrorToWindow { get; set; } = false;
+    public bool DebugListen { get; set; } = false;
 
-    /// <summary>Persist configuration to disk.</summary>
+    [System.NonSerialized] private IDalamudPluginInterface? _pi;
+
+    public void Initialize(IDalamudPluginInterface pi)
+    {
+        _pi = pi;
+        _pi.UiBuilder.DisableUserUiHide = false;
+    }
+
     public void Save() => _pi?.SavePluginConfig(this);
 }

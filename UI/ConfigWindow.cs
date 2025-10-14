@@ -7,16 +7,9 @@ using Dalamud.Bindings.ImGui;
 
 namespace NunuTheAICompanion.UI
 {
-    /// <summary>
-    /// Settings window for Little Nunu using Dalamud.Bindings.ImGui (no ImGuiNET).
-    /// Covers backend, memory & Soul Threads, Songcraft, voice, listening, broadcast, IPC,
-    /// UI/window, images, search, and debug.
-    /// </summary>
     public sealed class ConfigWindow : Window
     {
         private readonly Configuration _cfg;
-
-        // Reusable UTF-8 buffers per field label for InputText*
         private readonly Dictionary<string, byte[]> _buffers = new(StringComparer.Ordinal);
 
         public ConfigWindow(Configuration cfg)
@@ -54,13 +47,11 @@ namespace NunuTheAICompanion.UI
             if (ImGui.Button("Save & Apply", new Vector2(160, 0)))
             {
                 _cfg.Save();
-                PluginMain.Instance.RehookListener(); // apply listen changes immediately
+                PluginMain.Instance.RehookListener();
             }
             ImGui.SameLine();
-            ImGui.TextDisabled("Changes are saved to disk; some settings take effect instantly.");
+            ImGui.TextDisabled("Some settings take effect instantly.");
         }
-
-        // ---------- Tabs ----------
 
         private void DrawBackend()
         {
@@ -77,15 +68,13 @@ namespace NunuTheAICompanion.UI
 
         private void DrawMemory()
         {
-            CheckboxProp("Enable Soul Threads (topic-aware memory)", _cfg.SoulThreadsEnabled, v => _cfg.SoulThreadsEnabled = v);
+            CheckboxProp("Enable Soul Threads", _cfg.SoulThreadsEnabled, v => _cfg.SoulThreadsEnabled = v);
             SliderIntProp("Recent Context (ContextTurns)", _cfg.ContextTurns, v => _cfg.ContextTurns = v, 0, 64);
             InputTextProp("Embedding Model", _cfg.EmbeddingModel ?? string.Empty, v => _cfg.EmbeddingModel = v);
-            SliderFloatProp("Thread Similarity Threshold", _cfg.ThreadSimilarityThreshold, v => _cfg.ThreadSimilarityThreshold = v, 0.3f, 0.95f);
+            SliderFloatProp("Similarity Threshold", _cfg.ThreadSimilarityThreshold, v => _cfg.ThreadSimilarityThreshold = v, 0.3f, 0.95f);
             SliderIntProp("Max from Matching Thread", _cfg.ThreadContextMaxFromThread, v => _cfg.ThreadContextMaxFromThread = v, 0, 16);
             SliderIntProp("Max Recent (always include)", _cfg.ThreadContextMaxRecent, v => _cfg.ThreadContextMaxRecent = v, 0, 32);
-
-            ImGui.Separator();
-            ImGui.TextWrapped("Soul Threads weaves older, thematically similar memories into the prompt alongside recent turns.");
+            ImGui.TextWrapped("Weave thematically similar past turns with recent context.");
         }
 
         private void DrawSongcraft()
@@ -101,8 +90,7 @@ namespace NunuTheAICompanion.UI
             if (InputTextProp("Save Directory (blank = Memories)", saveDir, v => saveDir = v))
                 _cfg.SongcraftSaveDir = string.IsNullOrWhiteSpace(saveDir) ? null : saveDir;
 
-            ImGui.Separator();
-            ImGui.TextWrapped("Type '@nunu /song sorrow hush the storm' to compose on demand.");
+            ImGui.TextWrapped("Example: '@nunu /song sorrow hush the storm'");
         }
 
         private void DrawVoice()
@@ -111,7 +99,7 @@ namespace NunuTheAICompanion.UI
             InputTextProp("Voice Name (optional)", _cfg.VoiceName ?? string.Empty, v => _cfg.VoiceName = v);
             SliderIntProp("Rate", _cfg.VoiceRate, v => _cfg.VoiceRate = v, -10, 10);
             SliderIntProp("Volume", _cfg.VoiceVolume, v => _cfg.VoiceVolume = v, 0, 100);
-            CheckboxProp("Speak only when Chat window focused", _cfg.VoiceOnlyWhenWindowFocused, v => _cfg.VoiceOnlyWhenWindowFocused = v);
+            CheckboxProp("Speak only when Chat focused", _cfg.VoiceOnlyWhenWindowFocused, v => _cfg.VoiceOnlyWhenWindowFocused = v);
         }
 
         private void DrawListen()
@@ -132,8 +120,7 @@ namespace NunuTheAICompanion.UI
             InputTextProp("Callsign (e.g., @nunu)", _cfg.Callsign ?? "@nunu", v => _cfg.Callsign = v);
             ImGui.TextDisabled("When required, Nunu only responds if the message contains this callsign.");
 
-            if (changed)
-                PluginMain.Instance.RehookListener();
+            if (changed) PluginMain.Instance.RehookListener();
         }
 
         private void DrawBroadcastIpc()
@@ -143,13 +130,47 @@ namespace NunuTheAICompanion.UI
             InputTextProp("Persona Name", _cfg.PersonaName ?? "Little Nunu", v => _cfg.PersonaName = v);
 
             ImGui.Separator();
+            ImGui.Text("Echo Channel");
+            var chan = _cfg.EchoChannel;
+            if (ComboEcho("##echochan", ref chan))
+            {
+                _cfg.EchoChannel = chan;
+                _cfg.Save();
+                PluginMain.Instance?.GetType(); // noop to keep analyzer quiet
+            }
+
+            ImGui.Separator();
             ImGui.Text("IPC Relay");
             InputTextProp("Channel Name", _cfg.IpcChannelName ?? string.Empty, v => _cfg.IpcChannelName = v);
             CheckboxProp("Prefer IPC Relay (when bound)", _cfg.PreferIpcRelay, v => _cfg.PreferIpcRelay = v);
 
             ImGui.Separator();
-            if (ImGui.Button("Rebind IPC"))
-                PluginMain.Instance.RehookListener();
+            if (ImGui.Button("Rebind IPC")) PluginMain.Instance.RehookListener();
+        }
+
+        private static readonly string[] EchoNames = { "Say", "Party", "Shout", "Yell", "Alliance", "FreeCompany", "Echo" };
+
+        private static bool ComboEcho(string id, ref string value)
+        {
+            var idx = 0;
+            for (int i = 0; i < EchoNames.Length; i++)
+                if (EchoNames[i].Equals(value, StringComparison.OrdinalIgnoreCase)) { idx = i; break; }
+
+            var changed = false;
+            if (ImGui.BeginCombo("Echo Channel", EchoNames[idx]))
+            {
+                for (int i = 0; i < EchoNames.Length; i++)
+                {
+                    bool sel = (i == idx);
+                    if (ImGui.Selectable(EchoNames[i], sel))
+                    {
+                        idx = i; value = EchoNames[idx]; changed = true;
+                    }
+                    if (sel) ImGui.SetItemDefaultFocus();
+                }
+                ImGui.EndCombo();
+            }
+            return changed;
         }
 
         private void DrawUi()
@@ -193,62 +214,38 @@ namespace NunuTheAICompanion.UI
             CheckboxProp("Mirror listener debug to Chat window", _cfg.DebugMirrorToWindow, v => _cfg.DebugMirrorToWindow = v);
             CheckboxProp("Verbose listen debug", _cfg.DebugListen, v => _cfg.DebugListen = v);
             ImGui.Separator();
-            if (ImGui.Button("Rehook Listener Now"))
-                PluginMain.Instance.RehookListener();
+            if (ImGui.Button("Rehook Listener Now")) PluginMain.Instance.RehookListener();
         }
 
-        // ---------- Helper wrappers (Dalamud.Bindings.ImGui with UTF-8 buffers) ----------
-
+        // ---------- Helper wrappers (UTF-8 byte buffers) ----------
         private bool InputTextProp(string label, string value, Action<string> setter, int maxBytes = 2048)
         {
             var buf = GetBuffer(label, value, maxBytes);
             var changed = ImGui.InputText(label, buf, ImGuiInputTextFlags.None);
-            if (changed)
-            {
-                var text = BytesToString(buf);
-                setter(text);
-            }
+            if (changed) setter(BytesToString(buf));
             return changed;
         }
-
         private bool InputTextMultilineProp(string label, string value, Action<string> setter, Vector2 size, int maxBytes = 4096)
         {
             var buf = GetBuffer(label, value, maxBytes);
             var changed = ImGui.InputTextMultiline(label, buf, size, ImGuiInputTextFlags.None);
-            if (changed)
-            {
-                var text = BytesToString(buf);
-                setter(text);
-            }
+            if (changed) setter(BytesToString(buf));
             return changed;
         }
-
         private static bool CheckboxProp(string label, bool value, Action<bool> setter)
         {
-            var v = value;
-            var changed = ImGui.Checkbox(label, ref v);
-            if (changed) setter(v);
-            return changed;
+            var v = value; var changed = ImGui.Checkbox(label, ref v); if (changed) setter(v); return changed;
         }
-
         private static bool SliderIntProp(string label, int value, Action<int> setter, int min, int max)
         {
-            var v = value;
-            var changed = ImGui.SliderInt(label, ref v, min, max);
-            if (changed) setter(v);
-            return changed;
+            var v = value; var changed = ImGui.SliderInt(label, ref v, min, max); if (changed) setter(v); return changed;
         }
-
         private static bool SliderFloatProp(string label, float value, Action<float> setter, float min, float max)
         {
-            var v = value;
-            var changed = ImGui.SliderFloat(label, ref v, min, max);
-            if (changed) setter(v);
-            return changed;
+            var v = value; var changed = ImGui.SliderFloat(label, ref v, min, max); if (changed) setter(v); return changed;
         }
 
-        // ---------- UTF-8 buffer helpers ----------
-
+        // ---------- UTF-8 buffers ----------
         private byte[] GetBuffer(string key, string text, int size)
         {
             if (!_buffers.TryGetValue(key, out var buf) || buf.Length != size)
@@ -256,30 +253,21 @@ namespace NunuTheAICompanion.UI
                 buf = new byte[size];
                 _buffers[key] = buf;
             }
-
-            // write UTF-8 into buffer with proper NUL termination
             Array.Clear(buf, 0, buf.Length);
             if (!string.IsNullOrEmpty(text))
             {
-                var maxPayload = size - 1; // last byte reserved for NUL
+                var maxPayload = size - 1;
                 var bytes = Encoding.UTF8.GetBytes(text);
                 var len = Math.Min(bytes.Length, maxPayload);
                 Array.Copy(bytes, buf, len);
-                buf[len] = 0; // NUL
+                buf[len] = 0;
             }
-            else
-            {
-                buf[0] = 0;
-            }
-
+            else buf[0] = 0;
             return buf;
         }
-
         private static string BytesToString(byte[] buf)
         {
-            // find first NUL
-            var len = Array.IndexOf(buf, (byte)0);
-            if (len < 0) len = buf.Length;
+            var len = Array.IndexOf(buf, (byte)0); if (len < 0) len = buf.Length;
             return Encoding.UTF8.GetString(buf, 0, len);
         }
     }
