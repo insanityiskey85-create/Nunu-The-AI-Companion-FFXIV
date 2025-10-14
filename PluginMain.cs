@@ -65,18 +65,19 @@ namespace NunuTheAICompanion
         private bool _uiHooksBound;
         private bool _isStreaming;
 
+        // Typing Indicator
+        private bool _typingActive;
+
         public PluginMain()
         {
             Instance = this;
 
-            // No client timeout; we cancel via CTS while streaming.
             _http.Timeout = Timeout.InfiniteTimeSpan;
 
             // ---- Config
             Config = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
             Config.Initialize(PluginInterface);
 
-            // Echo channel from config
             _echoChannel = ParseChannel(Config.EchoChannel);
 
             // ---- Memory
@@ -98,12 +99,7 @@ namespace NunuTheAICompanion
             ConfigWindow = new ConfigWindow(Config);
             WindowSystem.AddWindow(ConfigWindow);
 
-            try
-            {
-                MemoryWindow = new MemoryWindow(Config, Memory, Log);
-                WindowSystem.AddWindow(MemoryWindow);
-            }
-            catch { /* optional window differences are fine */ }
+            try { MemoryWindow = new MemoryWindow(Config, Memory, Log); WindowSystem.AddWindow(MemoryWindow); } catch { }
 
             // ---- UiBuilder hooks
             if (!_uiHooksBound)
@@ -114,15 +110,14 @@ namespace NunuTheAICompanion
                 _uiHooksBound = true;
             }
 
-            if (Config.StartOpen)
-                ChatWindow.IsOpen = true;
+            if (Config.StartOpen) ChatWindow.IsOpen = true;
 
             // ---- Broadcaster (native + IPC)
             _broadcaster = new ChatBroadcaster(CommandManager, Framework, Log) { Enabled = true };
             NativeChatSender.Initialize(this, PluginInterface, Log);
             _broadcaster.SetNativeSender(full => NativeChatSender.TrySendFull(full));
 
-            // ---- IPC relay (create & bind if configured)
+            // ---- IPC relay
             _ipcRelay = new IpcChatRelay(PluginInterface, Log);
             if (!string.IsNullOrWhiteSpace(Config.IpcChannelName))
             {
@@ -139,7 +134,7 @@ namespace NunuTheAICompanion
                 HelpMessage = "Toggle Nunu. '/nunu help' for usage."
             });
 
-            // ---- Listener (inbound chat)
+            // ---- Listener
             RehookListener();
 
             // ---- Soul Threads + Songcraft
@@ -190,18 +185,13 @@ namespace NunuTheAICompanion
             _listener = new ChatListener(
                 ChatGui, Log, Config,
                 onHeard: OnHeardFromChat,
-                mirrorDebugToWindow: s =>
-                {
-                    if (Config.DebugMirrorToWindow)
-                        ChatWindow.AppendSystem(s);
-                });
+                mirrorDebugToWindow: s => { if (Config.DebugMirrorToWindow) ChatWindow.AppendSystem(s); });
             Log.Info("[Listener] rehooked with latest configuration.");
         }
 
         // ===== Inbound path =====
         private void OnHeardFromChat(string author, string text)
         {
-            // Bard-Call (/song …) short-circuit before LLM
             if (TryHandleBardCall(author, text))
                 return;
 
@@ -210,18 +200,18 @@ namespace NunuTheAICompanion
 
         private void HandleUserSend(string text)
         {
-            // Persist user line (threaded if available)
             try
             {
                 var who = string.IsNullOrWhiteSpace(Config.ChatDisplayName) ? "You" : Config.ChatDisplayName;
                 OnUserUtterance(who, text, CancellationToken.None);
             }
-            catch { /* best-effort */ }
+            catch { }
 
-            // Begin UI streaming
+            // Typing indicator at the moment streaming starts
+            StartTypingIndicator();
+
             ChatWindow.BeginAssistantStream();
 
-            // Build context (thread + recents) then add the current turn
             var request = BuildContext(text, CancellationToken.None);
             request.Add(("user", text));
 
@@ -249,32 +239,28 @@ namespace NunuTheAICompanion
                 {
                     if (string.IsNullOrEmpty(chunk)) continue;
                     reply += chunk;
-                    ChatWindow.AppendAssistantDelta(chunk); // stream deltas to UI
+                    ChatWindow.AppendAssistantDelta(chunk);
                 }
 
                 ChatWindow.EndAssistantStream();
 
                 if (!string.IsNullOrEmpty(reply))
                 {
-                    // Persist assistant line (threaded if available)
                     try { OnAssistantReply("Nunu", reply, CancellationToken.None); }
                     catch { if (Memory.Enabled) Memory.Append("assistant", reply, topic: "chat"); }
 
-                    // TTS
                     try { Voice?.Speak(reply); } catch { }
 
-                    // Broadcast to chat
                     if (_broadcaster?.Enabled == true)
                         _broadcaster.Enqueue(_echoChannel, reply);
 
-                    // Songcraft composition (optional, fire-and-forget)
                     try
                     {
                         var path = TriggerSongcraft(reply, mood: null);
                         if (!string.IsNullOrEmpty(path))
                             ChatWindow.AppendAssistant($"[song] Saved: {path}");
                     }
-                    catch { /* non-fatal */ }
+                    catch { }
                 }
             }
             catch (Exception ex)
@@ -285,9 +271,42 @@ namespace NunuTheAICompanion
             }
             finally
             {
+                StopTypingIndicator(); // always stop the typing state
                 _isStreaming = false;
                 try { cts.Dispose(); } catch { }
             }
+        }
+
+        // ===== Typing Indicator =====
+        private void StartTypingIndicator()
+        {
+            if (_typingActive) return;
+            _typingActive = true;
+
+            if (!Config.TypingIndicatorEnabled) return;
+            if (_broadcaster == null || !_broadcaster.Enabled) return;
+
+            var note = string.IsNullOrWhiteSpace(Config.TypingIndicatorMessage)
+                ? "Little Nunu is writing ...."
+                : Config.TypingIndicatorMessage;
+
+            _broadcaster.Enqueue(_echoChannel, note);
+        }
+
+        private void StopTypingIndicator()
+        {
+            if (!_typingActive) return;
+            _typingActive = false;
+
+            if (!Config.TypingIndicatorEnabled) return;
+            if (!Config.TypingIndicatorSendDone) return;
+            if (_broadcaster == null || !_broadcaster.Enabled) return;
+
+            var done = string.IsNullOrWhiteSpace(Config.TypingIndicatorDoneMessage)
+                ? "…done."
+                : Config.TypingIndicatorDoneMessage;
+
+            _broadcaster.Enqueue(_echoChannel, done);
         }
 
         // ===== Soul Threads =====
@@ -361,15 +380,12 @@ namespace NunuTheAICompanion
             }
         }
 
-        // ===== Bard-Call (/song … in chat text) =====
+        // ===== Bard-Call (/song …) =====
         public bool TryHandleBardCall(string author, string text)
         {
             if (!Config.SongcraftEnabled || _songcraft is null) return false;
 
-            var trig = string.IsNullOrWhiteSpace(Config.SongcraftBardCallTrigger)
-                ? "/song"
-                : Config.SongcraftBardCallTrigger!;
-
+            var trig = string.IsNullOrWhiteSpace(Config.SongcraftBardCallTrigger) ? "/song" : Config.SongcraftBardCallTrigger!;
             var idx = text.IndexOf(trig, StringComparison.OrdinalIgnoreCase);
             if (idx < 0) return false;
 
@@ -380,15 +396,12 @@ namespace NunuTheAICompanion
             if (!string.IsNullOrEmpty(after))
             {
                 var parts = after.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
-                if (parts.Length >= 1 && parts[0].Length <= 12) // simple mood capture
+                if (parts.Length >= 1 && parts[0].Length <= 12)
                 {
                     mood = parts[0];
                     lyric = parts.Length > 1 ? parts[1] : "";
                 }
-                else
-                {
-                    lyric = after;
-                }
+                else lyric = after;
             }
 
             string payload = string.IsNullOrWhiteSpace(lyric) ? "(no text)" : lyric;
@@ -413,7 +426,6 @@ namespace NunuTheAICompanion
                 try { _songLog?.Error(ex, "[Songcraft] bard-call failed"); } catch { }
             }
 
-            // Persist the command as a memory "moment"
             try { OnUserUtterance(author, $"{trig} {mood ?? ""} {payload}".Trim(), CancellationToken.None); } catch { }
             return true;
         }
@@ -422,100 +434,111 @@ namespace NunuTheAICompanion
 
         private static readonly StringComparer Ci = StringComparer.OrdinalIgnoreCase;
 
-        // alias -> Configuration property name
-        private static readonly Dictionary<string, string> _aliases = new(StringComparer.OrdinalIgnoreCase)
+        // NOTE: classic initialization to avoid indexer-initializer syntax issues
+        private static readonly Dictionary<string, string> _aliases = CreateAliases();
+
+        private static Dictionary<string, string> CreateAliases()
         {
+            var d = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
             // Backend
-            ["mode"] = nameof(Configuration.BackendMode),
-            ["endpoint"] = nameof(Configuration.BackendUrl),
-            ["url"] = nameof(Configuration.BackendUrl),
-            ["model"] = nameof(Configuration.ModelName),
-            ["temp"] = nameof(Configuration.Temperature),
-            ["system"] = nameof(Configuration.SystemPrompt),
+            d.Add("mode", nameof(Configuration.BackendMode));
+            d.Add("endpoint", nameof(Configuration.BackendUrl));
+            d.Add("url", nameof(Configuration.BackendUrl));
+            d.Add("model", nameof(Configuration.ModelName));
+            d.Add("temp", nameof(Configuration.Temperature));
+            d.Add("system", nameof(Configuration.SystemPrompt));
 
             // Memory / Soul Threads
-            ["context"] = nameof(Configuration.ContextTurns),
-            ["threads"] = nameof(Configuration.SoulThreadsEnabled),
-            ["embed"] = nameof(Configuration.EmbeddingModel),
-            ["thread.threshold"] = nameof(Configuration.ThreadSimilarityThreshold),
-            ["thread.max"] = nameof(Configuration.ThreadContextMaxFromThread),
-            ["recent.max"] = nameof(Configuration.ThreadContextMaxRecent),
+            d.Add("context", nameof(Configuration.ContextTurns));
+            d.Add("threads", nameof(Configuration.SoulThreadsEnabled));
+            d.Add("embed", nameof(Configuration.EmbeddingModel));
+            d.Add("thread.threshold", nameof(Configuration.ThreadSimilarityThreshold));
+            d.Add("thread.max", nameof(Configuration.ThreadContextMaxFromThread));
+            d.Add("recent.max", nameof(Configuration.ThreadContextMaxRecent));
 
             // Songcraft
-            ["song"] = nameof(Configuration.SongcraftEnabled),
-            ["song.key"] = nameof(Configuration.SongcraftKey),
-            ["song.tempo"] = nameof(Configuration.SongcraftTempoBpm),
-            ["song.bars"] = nameof(Configuration.SongcraftBars),
-            ["song.program"] = nameof(Configuration.SongcraftProgram),
-            ["song.dir"] = nameof(Configuration.SongcraftSaveDir),
-            ["song.trigger"] = nameof(Configuration.SongcraftBardCallTrigger),
+            d.Add("song", nameof(Configuration.SongcraftEnabled));
+            d.Add("song.key", nameof(Configuration.SongcraftKey));
+            d.Add("song.tempo", nameof(Configuration.SongcraftTempoBpm));
+            d.Add("song.bars", nameof(Configuration.SongcraftBars));
+            d.Add("song.program", nameof(Configuration.SongcraftProgram));
+            d.Add("song.dir", nameof(Configuration.SongcraftSaveDir));
+            d.Add("song.trigger", nameof(Configuration.SongcraftBardCallTrigger));
 
             // Voice
-            ["voice"] = nameof(Configuration.VoiceSpeakEnabled),
-            ["voice.name"] = nameof(Configuration.VoiceName),
-            ["voice.rate"] = nameof(Configuration.VoiceRate),
-            ["voice.vol"] = nameof(Configuration.VoiceVolume),
-            ["voice.focus"] = nameof(Configuration.VoiceOnlyWhenWindowFocused),
+            d.Add("voice", nameof(Configuration.VoiceSpeakEnabled));
+            d.Add("voice.name", nameof(Configuration.VoiceName));
+            d.Add("voice.rate", nameof(Configuration.VoiceRate));
+            d.Add("voice.vol", nameof(Configuration.VoiceVolume));
+            d.Add("voice.focus", nameof(Configuration.VoiceOnlyWhenWindowFocused));
 
             // Listen
-            ["listen"] = nameof(Configuration.ListenEnabled),
-            ["listen.self"] = nameof(Configuration.ListenSelf),
-            ["listen.say"] = nameof(Configuration.ListenSay),
-            ["listen.tell"] = nameof(Configuration.ListenTell),
-            ["listen.party"] = nameof(Configuration.ListenParty),
-            ["listen.alliance"] = nameof(Configuration.ListenAlliance),
-            ["listen.fc"] = nameof(Configuration.ListenFreeCompany),
-            ["listen.shout"] = nameof(Configuration.ListenShout),
-            ["listen.yell"] = nameof(Configuration.ListenYell),
-            ["callsign"] = nameof(Configuration.Callsign),
-            ["require.callsign"] = nameof(Configuration.RequireCallsign),
+            d.Add("listen", nameof(Configuration.ListenEnabled));
+            d.Add("listen.self", nameof(Configuration.ListenSelf));
+            d.Add("listen.say", nameof(Configuration.ListenSay));
+            d.Add("listen.tell", nameof(Configuration.ListenTell));
+            d.Add("listen.party", nameof(Configuration.ListenParty));
+            d.Add("listen.alliance", nameof(Configuration.ListenAlliance));
+            d.Add("listen.fc", nameof(Configuration.ListenFreeCompany));
+            d.Add("listen.shout", nameof(Configuration.ListenShout));
+            d.Add("listen.yell", nameof(Configuration.ListenYell));
+            d.Add("callsign", nameof(Configuration.Callsign));
+            d.Add("require.callsign", nameof(Configuration.RequireCallsign));
 
             // Broadcast & IPC
-            ["persona"] = nameof(Configuration.BroadcastAsPersona),
-            ["persona.name"] = nameof(Configuration.PersonaName),
-            ["ipc.channel"] = nameof(Configuration.IpcChannelName),
-            ["ipc.prefer"] = nameof(Configuration.PreferIpcRelay),
+            d.Add("persona", nameof(Configuration.BroadcastAsPersona));
+            d.Add("persona.name", nameof(Configuration.PersonaName));
+            d.Add("ipc.channel", nameof(Configuration.IpcChannelName));
+            d.Add("ipc.prefer", nameof(Configuration.PreferIpcRelay));
 
-            // Echo channel (broadcast target)
-            ["echo"] = nameof(Configuration.EchoChannel),
+            // Echo channel
+            d.Add("echo", nameof(Configuration.EchoChannel));
+
+            // Typing Indicator
+            d.Add("typing", nameof(Configuration.TypingIndicatorEnabled));
+            d.Add("typing.msg", nameof(Configuration.TypingIndicatorMessage));
+            d.Add("typing.done", nameof(Configuration.TypingIndicatorSendDone));
+            d.Add("typing.done.msg", nameof(Configuration.TypingIndicatorDoneMessage));
 
             // UI
-            ["startopen"] = nameof(Configuration.StartOpen),
-            ["opacity"] = nameof(Configuration.WindowOpacity),
-            ["ascii"] = nameof(Configuration.AsciiSafe),
-            ["twopane"] = nameof(Configuration.TwoPaneMode),
-            ["copybuttons"] = nameof(Configuration.ShowCopyButtons),
-            ["fontscale"] = nameof(Configuration.FontScale),
-            ["lock"] = nameof(Configuration.LockWindow),
-            ["displayname"] = nameof(Configuration.ChatDisplayName),
+            d.Add("startopen", nameof(Configuration.StartOpen));
+            d.Add("opacity", nameof(Configuration.WindowOpacity));
+            d.Add("ascii", nameof(Configuration.AsciiSafe));
+            d.Add("twopane", nameof(Configuration.TwoPaneMode));
+            d.Add("copybuttons", nameof(Configuration.ShowCopyButtons));
+            d.Add("fontscale", nameof(Configuration.FontScale));
+            d.Add("lock", nameof(Configuration.LockWindow));
+            d.Add("displayname", nameof(Configuration.ChatDisplayName));
 
             // Search
-            ["net"] = nameof(Configuration.AllowInternet),
-            ["search.backend"] = nameof(Configuration.SearchBackend),
-            ["search.key"] = nameof(Configuration.SearchApiKey),
-            ["search.max"] = nameof(Configuration.SearchMaxResults),
-            ["search.timeout"] = nameof(Configuration.SearchTimeoutSec),
+            d.Add("net", nameof(Configuration.AllowInternet));
+            d.Add("search.backend", nameof(Configuration.SearchBackend));
+            d.Add("search.key", nameof(Configuration.SearchApiKey));
+            d.Add("search.max", nameof(Configuration.SearchMaxResults));
+            d.Add("search.timeout", nameof(Configuration.SearchTimeoutSec));
 
             // Images
-            ["img.backend"] = nameof(Configuration.ImageBackend),
-            ["img.url"] = nameof(Configuration.ImageBaseUrl),
-            ["img.model"] = nameof(Configuration.ImageModel),
-            ["img.steps"] = nameof(Configuration.ImageSteps),
-            ["img.cfg"] = nameof(Configuration.ImageGuidance),
-            ["img.w"] = nameof(Configuration.ImageWidth),
-            ["img.h"] = nameof(Configuration.ImageHeight),
-            ["img.sampler"] = nameof(Configuration.ImageSampler),
-            ["img.seed"] = nameof(Configuration.ImageSeed),
-            ["img.timeout"] = nameof(Configuration.ImageTimeoutSec),
-            ["img.save"] = nameof(Configuration.SaveImages),
-            ["img.dir"] = nameof(Configuration.ImageSaveSubdir),
+            d.Add("img.backend", nameof(Configuration.ImageBackend));
+            d.Add("img.url", nameof(Configuration.ImageBaseUrl));
+            d.Add("img.model", nameof(Configuration.ImageModel));
+            d.Add("img.steps", nameof(Configuration.ImageSteps));
+            d.Add("img.cfg", nameof(Configuration.ImageGuidance));
+            d.Add("img.w", nameof(Configuration.ImageWidth));
+            d.Add("img.h", nameof(Configuration.ImageHeight));
+            d.Add("img.sampler", nameof(Configuration.ImageSampler));
+            d.Add("img.seed", nameof(Configuration.ImageSeed));
+            d.Add("img.timeout", nameof(Configuration.ImageTimeoutSec));
+            d.Add("img.save", nameof(Configuration.SaveImages));
+            d.Add("img.dir", nameof(Configuration.ImageSaveSubdir));
 
             // Debug
-            ["debug.listen"] = nameof(Configuration.DebugListen),
-            ["debug.mirror"] = nameof(Configuration.DebugMirrorToWindow),
-        };
+            d.Add("debug.listen", nameof(Configuration.DebugListen));
+            d.Add("debug.mirror", nameof(Configuration.DebugMirrorToWindow));
 
-        // slash usage summary
+            return d;
+        }
+
         private static readonly string _help = string.Join("\n", new[]
         {
             "Usage:",
@@ -530,17 +553,16 @@ namespace NunuTheAICompanion
             "/nunu ipc unbind                        -> unbind IPC channel",
             "/nunu echo <say|party|shout|yell|fc|echo> -> set broadcast channel",
             "/nunu song [mood] <lyric...>            -> compose via Songcraft immediately",
+            "/nunu set typing true|false             -> enable/disable 'is writing' indicator",
+            "/nunu set typing.msg \"Little Nunu is writing ....\"",
+            "/nunu set typing.done true|false        -> send a done message when finished",
+            "/nunu set typing.done.msg \"…done.\"",
         });
 
         private void HandleSlashCommand(string raw)
         {
             var args = (raw ?? string.Empty).Trim();
-            if (string.IsNullOrEmpty(args))
-            {
-                // default: toggle chat window
-                ChatWindow.IsOpen = !ChatWindow.IsOpen;
-                return;
-            }
+            if (string.IsNullOrEmpty(args)) { ChatWindow.IsOpen = !ChatWindow.IsOpen; return; }
 
             var parts = SplitArgs(args);
             if (parts.Count == 0) return;
@@ -550,58 +572,19 @@ namespace NunuTheAICompanion
             switch (head)
             {
                 case "help":
-                case "?":
-                    ChatWindow.AppendSystem(_help);
-                    return;
-
-                case "open":
-                    CmdOpen(parts);
-                    return;
-
-                case "get":
-                    CmdGet(parts);
-                    return;
-
-                case "set":
-                    CmdSet(parts);
-                    return;
-
-                case "toggle":
-                    CmdToggle(parts);
-                    return;
-
-                case "list":
-                    CmdListAliases();
-                    return;
-
-                case "rehook":
-                    RehookListener();
-                    ChatWindow.AppendSystem("[listener] rehooked.");
-                    return;
-
-                case "ipc":
-                    CmdIpc(parts);
-                    return;
-
-                case "echo":
-                    CmdEcho(parts);
-                    return;
-
-                case "song":
-                    CmdSong(parts);
-                    return;
-
-                case "config":
-                    ConfigWindow.IsOpen = true;
-                    return;
-
-                case "memory":
-                    if (MemoryWindow is { } mw) mw.IsOpen = true;
-                    return;
-
-                default:
-                    ChatWindow.AppendSystem($"Unknown subcommand '{head}'. Type '/nunu help' for usage.");
-                    return;
+                case "?": ChatWindow.AppendSystem(_help); return;
+                case "open": CmdOpen(parts); return;
+                case "get": CmdGet(parts); return;
+                case "set": CmdSet(parts); return;
+                case "toggle": CmdToggle(parts); return;
+                case "list": CmdListAliases(); return;
+                case "rehook": RehookListener(); ChatWindow.AppendSystem("[listener] rehooked."); return;
+                case "ipc": CmdIpc(parts); return;
+                case "echo": CmdEcho(parts); return;
+                case "song": CmdSong(parts); return;
+                case "config": ConfigWindow.IsOpen = true; return;
+                case "memory": if (MemoryWindow is { } mw) mw.IsOpen = true; return;
+                default: ChatWindow.AppendSystem($"Unknown subcommand '{head}'. Type '/nunu help' for usage."); return;
             }
         }
 

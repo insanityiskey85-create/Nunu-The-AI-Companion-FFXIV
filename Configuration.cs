@@ -7,16 +7,16 @@ namespace NunuTheAICompanion;
 
 public sealed class Configuration : Dalamud.Configuration.IPluginConfiguration
 {
-    public int Version { get; set; } = 4;
+    public int Version { get; set; } = 5;
 
     // -------- Backend --------
     public string BackendMode { get; set; } = "ollama";
     public string BackendUrl { get; set; } = "http://127.0.0.1:11434/api/chat";
-    public string ModelName { get; set; } = "nunu";
+    public string ModelName { get; set; } = "nunu-8b";
     public float Temperature { get; set; } = 0.7f;
     public string SystemPrompt { get; set; } =
         "You are Little Nunu, the Soul Weeper. Stay in FFXIV voice; be helpful and kind.";
-    public string ChatDisplayName { get; set; } = "You";
+    public string ChatDisplayName { get; set; } = "Real Nunu";
 
     // --- Endpoints (compat with older services) ---
     public string ChatEndpointUrl { get; set; } = "http://127.0.0.1:11434/api/chat";
@@ -24,19 +24,19 @@ public sealed class Configuration : Dalamud.Configuration.IPluginConfiguration
 
     // -------- Memory / Soul Threads --------
     public bool SoulThreadsEnabled { get; set; } = true;
-    public int ContextTurns { get; set; } = 12;
+    public int ContextTurns { get; set; } = 64;
     public string? EmbeddingModel { get; set; } = "nomic-embed-text";
     public float ThreadSimilarityThreshold { get; set; } = 0.72f;
-    public int ThreadContextMaxFromThread { get; set; } = 8;
-    public int ThreadContextMaxRecent { get; set; } = 4;
+    public int ThreadContextMaxFromThread { get; set; } = 16;
+    public int ThreadContextMaxRecent { get; set; } = 32;
 
     // -------- Songcraft --------
     public bool SongcraftEnabled { get; set; } = true;
     public string SongcraftBardCallTrigger { get; set; } = "/song";
-    public string SongcraftKey { get; set; } = "C4";
+    public string SongcraftKey { get; set; } = "C3,C6";
     public int SongcraftTempoBpm { get; set; } = 96;
     public int SongcraftBars { get; set; } = 8;
-    public int SongcraftProgram { get; set; } = 0; // GM program 0..127
+    public int SongcraftProgram { get; set; } = 0; // GM 0..127
     public string? SongcraftSaveDir { get; set; } = null;
 
     // -------- Voice --------
@@ -48,21 +48,24 @@ public sealed class Configuration : Dalamud.Configuration.IPluginConfiguration
 
     // -------- Listen (inbound chat) --------
     public bool ListenEnabled { get; set; } = true;
-    public bool ListenSelf { get; set; } = false;
+    public bool ListenSelf { get; set; } = true;
     public bool ListenSay { get; set; } = true;
     public bool ListenTell { get; set; } = true;
     public bool ListenParty { get; set; } = true;
     public bool ListenAlliance { get; set; } = false;
-    public bool ListenFreeCompany { get; set; } = false;
+    public bool ListenFreeCompany { get; set; } = true;
     public bool ListenShout { get; set; } = false;
     public bool ListenYell { get; set; } = false;
-    public bool RequireCallsign { get; set; } = false;
-    public string Callsign { get; set; } = "@nunu";
+    public bool RequireCallsign { get; set; } = true;
+    public string Callsign { get; set; } = "@Little Nunu";
 
-    // ---- Whitelist for allowed authors (by player name) ----
-    // Empty list = allow all (subject to other listen rules).
-    // Comparison is case-insensitive; you can fill via UI or /nunu set.
+    // ---- Whitelist for allowed authors ----
     public List<string> Whitelist { get; set; } = new List<string>();
+    public bool IsWhitelisted(string author)
+    {
+        if (Whitelist == null || Whitelist.Count == 0) return true;
+        return Whitelist.Contains(author?.Trim() ?? string.Empty, StringComparer.OrdinalIgnoreCase);
+    }
 
     // -------- Broadcast & IPC --------
     public bool BroadcastAsPersona { get; set; } = true;
@@ -70,17 +73,22 @@ public sealed class Configuration : Dalamud.Configuration.IPluginConfiguration
     public string? IpcChannelName { get; set; } = string.Empty;
     public bool PreferIpcRelay { get; set; } = true;
 
-    // Preferred outgoing channel for broadcasts
-    // Values: Say, Party, Shout, Yell, Alliance, FreeCompany, Echo
+    // Preferred outgoing channel: Say, Party, Shout, Yell, FreeCompany, Echo
     public string EchoChannel { get; set; } = "Say";
+
+    // -------- Typing Indicator (NEW) --------
+    public bool TypingIndicatorEnabled { get; set; } = true;
+    public string TypingIndicatorMessage { get; set; } = "Little Nunu is writing ....";
+    public bool TypingIndicatorSendDone { get; set; } = true;
+    public string TypingIndicatorDoneMessage { get; set; } = "…done.";
 
     // -------- UI --------
     public bool StartOpen { get; set; } = true;
     public float WindowOpacity { get; set; } = 1.0f; // 0.25..1.0
-    public bool AsciiSafe { get; set; } = false;
+    public bool AsciiSafe { get; set; } = true;
     public bool TwoPaneMode { get; set; } = true;
     public bool ShowCopyButtons { get; set; } = true;
-    public float FontScale { get; set; } = 1.0f; // 0.75..1.5
+    public float FontScale { get; set; } = 1.0f;
     public bool LockWindow { get; set; } = false;
 
     // -------- Images --------
@@ -98,15 +106,15 @@ public sealed class Configuration : Dalamud.Configuration.IPluginConfiguration
     public string ImageSaveSubdir { get; set; } = "Images";
 
     // -------- Search --------
-    public bool AllowInternet { get; set; } = false;
+    public bool AllowInternet { get; set; } = true;
     public string SearchBackend { get; set; } = "serpapi";
-    public string SearchApiKey { get; set; } = "";
-    public int SearchMaxResults { get; set; } = 5;
-    public int SearchTimeoutSec { get; set; } = 20;
+    public string SearchApiKey { get; set; } = "a7913350a7306681a9dc0546e1e9ba2372930f19da59b8b444f96e2a22f77e63";
+    public int SearchMaxResults { get; set; } = 50;
+    public int SearchTimeoutSec { get; set; } = 120;
 
     // -------- Debug --------
-    public bool DebugMirrorToWindow { get; set; } = false;
-    public bool DebugListen { get; set; } = false;
+    public bool DebugMirrorToWindow { get; set; } = true;
+    public bool DebugListen { get; set; } = true;
 
     [NonSerialized] private IDalamudPluginInterface? _pi;
 
@@ -114,7 +122,6 @@ public sealed class Configuration : Dalamud.Configuration.IPluginConfiguration
     {
         _pi = pi;
         _pi.UiBuilder.DisableUserUiHide = false;
-        // Normalize whitelist to a consistent form
         NormalizeWhitelist();
     }
 
@@ -124,21 +131,13 @@ public sealed class Configuration : Dalamud.Configuration.IPluginConfiguration
         _pi?.SavePluginConfig(this);
     }
 
-    // --- Helpers ---
     private void NormalizeWhitelist()
     {
         if (Whitelist == null) { Whitelist = new List<string>(); return; }
-        // trim empties and normalize casing
         Whitelist = Whitelist
             .Where(s => !string.IsNullOrWhiteSpace(s))
             .Select(s => s.Trim())
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
-    }
-
-    public bool IsWhitelisted(string author)
-    {
-        if (Whitelist == null || Whitelist.Count == 0) return true; // empty = allow all
-        return Whitelist.Contains(author?.Trim() ?? string.Empty, StringComparer.OrdinalIgnoreCase);
     }
 }
