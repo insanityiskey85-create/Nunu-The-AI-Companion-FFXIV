@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Net.Http;
 using System.Numerics;
+using System.Reflection;
+using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
 using Dalamud.Game.Command;
@@ -73,7 +75,7 @@ public sealed partial class PluginMain : IDalamudPlugin
     {
         Instance = this;
 
-        // HTTP timeout: we cancel via CTS during streaming
+        // HTTP timeout: cancel via CTS during streaming
         _http.Timeout = Timeout.InfiniteTimeSpan;
 
         // ---- Config
@@ -127,7 +129,7 @@ public sealed partial class PluginMain : IDalamudPlugin
         NativeChatSender.Initialize(this, PluginInterface, Log);
         _broadcaster.SetNativeSender(full => NativeChatSender.TrySendFull(full));
 
-        // ---- IPC relay (optional)
+        // ---- IPC relay (create & bind if configured)
         _ipcRelay = new IpcChatRelay(PluginInterface, Log);
         if (!string.IsNullOrWhiteSpace(Config.IpcChannelName))
         {
@@ -141,7 +143,7 @@ public sealed partial class PluginMain : IDalamudPlugin
         // ---- Commands
         CommandManager.AddHandler(Command, new CommandInfo(OnCommand)
         {
-            HelpMessage = "Toggle Nunu. '/nunu config' opens settings. '/nunu memory' opens memories."
+            HelpMessage = "Toggle Nunu. '/nunu help' for full command list."
         });
 
         // ---- Listener (inbound chat)
@@ -188,11 +190,7 @@ public sealed partial class PluginMain : IDalamudPlugin
     // ===== Command handler =====
     private void OnCommand(string cmd, string args)
     {
-        args = (args ?? string.Empty).Trim().ToLowerInvariant();
-        if (args == "config") { ConfigWindow.IsOpen = true; return; }
-        if (args == "memory") { if (MemoryWindow is { } mw) mw.IsOpen = true; return; }
-
-        ChatWindow.IsOpen = !ChatWindow.IsOpen;
+        HandleSlashCommand(args ?? string.Empty);
     }
 
     // ===== Listener boot / rehook =====
@@ -371,7 +369,7 @@ public sealed partial class PluginMain : IDalamudPlugin
         }
     }
 
-    // ===== Bard-Call (/song …) =====
+    // ===== Bard-Call (/song … in chat text) =====
     public bool TryHandleBardCall(string author, string text)
     {
         if (!Config.SongcraftEnabled || _songcraft is null) return false;
@@ -426,5 +424,486 @@ public sealed partial class PluginMain : IDalamudPlugin
         // Persist the command as a memory "moment"
         try { OnUserUtterance(author, $"{trig} {mood ?? ""} {payload}".Trim(), CancellationToken.None); } catch { }
         return true;
+    }
+
+    // ========================= Slash Command Router =========================
+
+    private static readonly StringComparer Ci = StringComparer.OrdinalIgnoreCase;
+
+    // alias -> Configuration property name
+    private static readonly Dictionary<string, string> _aliases = new(StringComparer.OrdinalIgnoreCase)
+    {
+        // Backend
+        ["mode"] = nameof(Configuration.BackendMode),
+        ["endpoint"] = nameof(Configuration.BackendUrl),
+        ["url"] = nameof(Configuration.BackendUrl),
+        ["model"] = nameof(Configuration.ModelName),
+        ["temp"] = nameof(Configuration.Temperature),
+        ["system"] = nameof(Configuration.SystemPrompt),
+
+        // Memory / Soul Threads
+        ["context"] = nameof(Configuration.ContextTurns),
+        ["threads"] = nameof(Configuration.SoulThreadsEnabled),
+        ["embed"] = nameof(Configuration.EmbeddingModel),
+        ["thread.threshold"] = nameof(Configuration.ThreadSimilarityThreshold),
+        ["thread.max"] = nameof(Configuration.ThreadContextMaxFromThread),
+        ["recent.max"] = nameof(Configuration.ThreadContextMaxRecent),
+
+        // Songcraft
+        ["song"] = nameof(Configuration.SongcraftEnabled),
+        ["song.key"] = nameof(Configuration.SongcraftKey),
+        ["song.tempo"] = nameof(Configuration.SongcraftTempoBpm),
+        ["song.bars"] = nameof(Configuration.SongcraftBars),
+        ["song.program"] = nameof(Configuration.SongcraftProgram),
+        ["song.dir"] = nameof(Configuration.SongcraftSaveDir),
+        ["song.trigger"] = nameof(Configuration.SongcraftBardCallTrigger),
+
+        // Voice
+        ["voice"] = nameof(Configuration.VoiceSpeakEnabled),
+        ["voice.name"] = nameof(Configuration.VoiceName),
+        ["voice.rate"] = nameof(Configuration.VoiceRate),
+        ["voice.vol"] = nameof(Configuration.VoiceVolume),
+        ["voice.focus"] = nameof(Configuration.VoiceOnlyWhenWindowFocused),
+
+        // Listen
+        ["listen"] = nameof(Configuration.ListenEnabled),
+        ["listen.self"] = nameof(Configuration.ListenSelf),
+        ["listen.say"] = nameof(Configuration.ListenSay),
+        ["listen.tell"] = nameof(Configuration.ListenTell),
+        ["listen.party"] = nameof(Configuration.ListenParty),
+        ["listen.alliance"] = nameof(Configuration.ListenAlliance),
+        ["listen.fc"] = nameof(Configuration.ListenFreeCompany),
+        ["listen.shout"] = nameof(Configuration.ListenShout),
+        ["listen.yell"] = nameof(Configuration.ListenYell),
+        ["callsign"] = nameof(Configuration.Callsign),
+        ["require.callsign"] = nameof(Configuration.RequireCallsign),
+
+        // Broadcast & IPC
+        ["persona"] = nameof(Configuration.BroadcastAsPersona),
+        ["persona.name"] = nameof(Configuration.PersonaName),
+        ["ipc.channel"] = nameof(Configuration.IpcChannelName),
+        ["ipc.prefer"] = nameof(Configuration.PreferIpcRelay),
+
+        // UI
+        ["startopen"] = nameof(Configuration.StartOpen),
+        ["opacity"] = nameof(Configuration.WindowOpacity),
+        ["ascii"] = nameof(Configuration.AsciiSafe),
+        ["twopane"] = nameof(Configuration.TwoPaneMode),
+        ["copybuttons"] = nameof(Configuration.ShowCopyButtons),
+        ["fontscale"] = nameof(Configuration.FontScale),
+        ["lock"] = nameof(Configuration.LockWindow),
+        ["displayname"] = nameof(Configuration.ChatDisplayName),
+
+        // Search
+        ["net"] = nameof(Configuration.AllowInternet),
+        ["search.backend"] = nameof(Configuration.SearchBackend),
+        ["search.key"] = nameof(Configuration.SearchApiKey),
+        ["search.max"] = nameof(Configuration.SearchMaxResults),
+        ["search.timeout"] = nameof(Configuration.SearchTimeoutSec),
+
+        // Images
+        ["img.backend"] = nameof(Configuration.ImageBackend),
+        ["img.url"] = nameof(Configuration.ImageBaseUrl),
+        ["img.model"] = nameof(Configuration.ImageModel),
+        ["img.steps"] = nameof(Configuration.ImageSteps),
+        ["img.cfg"] = nameof(Configuration.ImageGuidance),
+        ["img.w"] = nameof(Configuration.ImageWidth),
+        ["img.h"] = nameof(Configuration.ImageHeight),
+        ["img.sampler"] = nameof(Configuration.ImageSampler),
+        ["img.seed"] = nameof(Configuration.ImageSeed),
+        ["img.timeout"] = nameof(Configuration.ImageTimeoutSec),
+        ["img.save"] = nameof(Configuration.SaveImages),
+        ["img.dir"] = nameof(Configuration.ImageSaveSubdir),
+
+        // Debug
+        ["debug.listen"] = nameof(Configuration.DebugListen),
+        ["debug.mirror"] = nameof(Configuration.DebugMirrorToWindow),
+    };
+
+    // slash usage summary
+    private static readonly string _help = string.Join("\n", new[]
+    {
+        "Usage:",
+        "/nunu                                    -> toggle chat window",
+        "/nunu open chat|config|memory           -> open a window",
+        "/nunu get <key|alias>                   -> show a config value",
+        "/nunu set <key|alias> <value...>        -> set a config value (bool/int/float/string)",
+        "/nunu toggle <key|alias>                -> toggle a bool config",
+        "/nunu list                              -> list common aliases",
+        "/nunu rehook                            -> rehook chat listener",
+        "/nunu ipc bind <channel>                -> bind IPC channel",
+        "/nunu ipc unbind                        -> unbind IPC channel",
+        "/nunu song [mood] <lyric...>            -> compose via Songcraft immediately",
+    });
+
+    private void HandleSlashCommand(string raw)
+    {
+        var args = (raw ?? string.Empty).Trim();
+        if (string.IsNullOrEmpty(args))
+        {
+            // default: toggle chat window
+            ChatWindow.IsOpen = !ChatWindow.IsOpen;
+            return;
+        }
+
+        var parts = SplitArgs(args);
+        if (parts.Count == 0) return;
+
+        var head = parts[0].ToLowerInvariant();
+
+        switch (head)
+        {
+            case "help":
+            case "?":
+                ChatWindow.AppendSystem(_help);
+                return;
+
+            case "open":
+                CmdOpen(parts);
+                return;
+
+            case "get":
+                CmdGet(parts);
+                return;
+
+            case "set":
+                CmdSet(parts);
+                return;
+
+            case "toggle":
+                CmdToggle(parts);
+                return;
+
+            case "list":
+                CmdListAliases();
+                return;
+
+            case "rehook":
+                RehookListener();
+                ChatWindow.AppendSystem("[listener] rehooked.");
+                return;
+
+            case "ipc":
+                CmdIpc(parts);
+                return;
+
+            case "song":
+                CmdSong(parts);
+                return;
+
+            case "config":
+                ConfigWindow.IsOpen = true;
+                return;
+
+            case "memory":
+                if (MemoryWindow is { } mw) mw.IsOpen = true;
+                return;
+
+            default:
+                ChatWindow.AppendSystem($"Unknown subcommand '{head}'. Type '/nunu help' for usage.");
+                return;
+        }
+    }
+
+    // --- subcommand implementations ---
+
+    private void CmdOpen(List<string> parts)
+    {
+        if (parts.Count < 2)
+        {
+            ChatWindow.AppendSystem("open what? chat|config|memory");
+            return;
+        }
+        var target = parts[1].ToLowerInvariant();
+        if (target is "chat" or "main") { ChatWindow.IsOpen = true; return; }
+        if (target is "config" or "settings") { ConfigWindow.IsOpen = true; return; }
+        if (target is "mem" or "memory") { if (MemoryWindow is { } mw) mw.IsOpen = true; return; }
+        ChatWindow.AppendSystem($"Unknown window '{target}'.");
+    }
+
+    private void CmdGet(List<string> parts)
+    {
+        if (parts.Count < 2) { ChatWindow.AppendSystem("get <key|alias>"); return; }
+        var key = ResolveKey(parts[1]);
+        if (key is null) { ChatWindow.AppendSystem($"Unknown key/alias '{parts[1]}'. Use '/nunu list'."); return; }
+
+        var pi = typeof(Configuration).GetProperty(key, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+        if (pi is null) { ChatWindow.AppendSystem($"No property '{key}' on Configuration."); return; }
+
+        var val = pi.GetValue(Config);
+        ChatWindow.AppendSystem($"{key} = {(val is null ? "(null)" : val.ToString())}");
+    }
+
+    private void CmdSet(List<string> parts)
+    {
+        if (parts.Count < 3) { ChatWindow.AppendSystem("set <key|alias> <value...>"); return; }
+        var key = ResolveKey(parts[1]);
+        if (key is null) { ChatWindow.AppendSystem($"Unknown key/alias '{parts[1]}'. Use '/nunu list'."); return; }
+
+        var pi = typeof(Configuration).GetProperty(key, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+        if (pi is null || !pi.CanWrite) { ChatWindow.AppendSystem($"Cannot set '{key}'."); return; }
+
+        var valueText = string.Join(' ', parts.GetRange(2, parts.Count - 2));
+        if (!TryConvert(valueText, pi.PropertyType, out var boxed, out var error))
+        {
+            ChatWindow.AppendSystem($"set {key}: {error}");
+            return;
+        }
+
+        var before = pi.GetValue(Config);
+        pi.SetValue(Config, boxed);
+
+        Config.Save();
+        ChatWindow.AppendSystem($"set {key} = {boxed}");
+
+        ApplySideEffectsOnConfigChange(key, before, boxed);
+    }
+
+    private void CmdToggle(List<string> parts)
+    {
+        if (parts.Count < 2) { ChatWindow.AppendSystem("toggle <key|alias>"); return; }
+        var key = ResolveKey(parts[1]);
+        if (key is null) { ChatWindow.AppendSystem($"Unknown key/alias '{parts[1]}'. Use '/nunu list'."); return; }
+
+        var pi = typeof(Configuration).GetProperty(key, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+        if (pi is null || pi.PropertyType != typeof(bool) || !pi.CanWrite)
+        {
+            ChatWindow.AppendSystem($"'{key}' is not a writable bool.");
+            return;
+        }
+
+        var current = (bool)(pi.GetValue(Config) ?? false);
+        var next = !current;
+        pi.SetValue(Config, next);
+        Config.Save();
+        ChatWindow.AppendSystem($"toggle {key} -> {next}");
+
+        ApplySideEffectsOnConfigChange(key, current, next);
+    }
+
+    private void CmdListAliases()
+    {
+        var lines = new List<string>
+        {
+            "Common keys/aliases (you can also use real property names):"
+        };
+        foreach (var kv in _aliases)
+            lines.Add($"- {kv.Key} -> {kv.Value}");
+        ChatWindow.AppendSystem(string.Join("\n", lines));
+    }
+
+    private void CmdIpc(List<string> parts)
+    {
+        if (parts.Count < 2) { ChatWindow.AppendSystem("ipc bind <channel> | ipc unbind"); return; }
+        var act = parts[1].ToLowerInvariant();
+
+        if (act == "bind")
+        {
+            if (parts.Count < 3) { ChatWindow.AppendSystem("ipc bind <channel>"); return; }
+            var name = parts[2];
+
+            // Recreate relay and bind
+            try { _ipcRelay?.Dispose(); } catch { }
+            _ipcRelay = new IpcChatRelay(PluginInterface, Log);
+
+            var ok = _ipcRelay.Bind(name);
+            Config.IpcChannelName = ok ? name : string.Empty;
+            Config.Save();
+
+            _broadcaster?.SetIpcRelay(_ipcRelay, Config.PreferIpcRelay);
+            ChatWindow.AppendSystem(ok ? $"[ipc] bound to '{name}'" : $"[ipc] failed to bind '{name}'");
+            return;
+        }
+
+        if (act == "unbind")
+        {
+            try { _ipcRelay?.Dispose(); } catch { }
+            _ipcRelay = new IpcChatRelay(PluginInterface, Log);
+            Config.IpcChannelName = string.Empty;
+            Config.Save();
+
+            _broadcaster?.SetIpcRelay(_ipcRelay, Config.PreferIpcRelay);
+            ChatWindow.AppendSystem("[ipc] unbound.");
+            return;
+        }
+
+        ChatWindow.AppendSystem("ipc bind <channel> | ipc unbind");
+    }
+
+    private void CmdSong(List<string> parts)
+    {
+        // `/nunu song [mood] <lyric...>`
+        if (!Config.SongcraftEnabled || _songcraft is null)
+        {
+            ChatWindow.AddSystemLine("[Songcraft] disabled.");
+            return;
+        }
+
+        string? mood = null;
+        string lyric = "";
+
+        if (parts.Count >= 2)
+        {
+            if (_songMoods.Contains(parts[1]))
+            {
+                mood = parts[1];
+                lyric = parts.Count >= 3 ? string.Join(' ', parts.GetRange(2, parts.Count - 2)) : "";
+            }
+            else
+            {
+                lyric = string.Join(' ', parts.GetRange(1, parts.Count - 1));
+            }
+        }
+
+        var text = string.IsNullOrWhiteSpace(lyric) ? "(no text)" : lyric;
+
+        try
+        {
+            var path = TriggerSongcraft(text, mood);
+            ChatWindow.AddSystemLine(!string.IsNullOrEmpty(path)
+                ? $"[Songcraft] Saved: {path}"
+                : "[Songcraft] Failed to compose.");
+        }
+        catch (Exception ex)
+        {
+            ChatWindow.AddSystemLine("[Songcraft] Error while composing (see logs).");
+            try { _songLog?.Error(ex, "[Songcraft] /nunu song failed"); } catch { }
+        }
+    }
+
+    // --- utilities ---
+
+    private static List<string> SplitArgs(string s)
+    {
+        // simple splitter that respects quotes
+        var list = new List<string>();
+        if (string.IsNullOrWhiteSpace(s)) return list;
+        var i = 0;
+        while (i < s.Length)
+        {
+            while (i < s.Length && char.IsWhiteSpace(s[i])) i++;
+            if (i >= s.Length) break;
+
+            if (s[i] == '"' || s[i] == '“' || s[i] == '”')
+            {
+                var q = s[i];
+                i++;
+                var start = i;
+                while (i < s.Length && s[i] != q) i++;
+                list.Add(s[start..Math.Min(i, s.Length)]);
+                if (i < s.Length && s[i] == q) i++;
+            }
+            else
+            {
+                var start = i;
+                while (i < s.Length && !char.IsWhiteSpace(s[i])) i++;
+                list.Add(s[start..i]);
+            }
+        }
+        return list;
+    }
+
+    private string? ResolveKey(string input)
+    {
+        if (_aliases.TryGetValue(input, out var real))
+            return real;
+
+        // allow direct property names (case-insensitive)
+        var pi = typeof(Configuration).GetProperty(input,
+            BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+        return pi?.Name;
+    }
+
+    private static bool TryConvert(string text, Type target, out object? boxed, out string error)
+    {
+        try
+        {
+            if (target == typeof(string)) { boxed = text; error = ""; return true; }
+            if (target == typeof(bool))
+            {
+                if (bool.TryParse(text, out var b)) { boxed = b; error = ""; return true; }
+                if (text.Equals("on", StringComparison.OrdinalIgnoreCase)) { boxed = true; error = ""; return true; }
+                if (text.Equals("off", StringComparison.OrdinalIgnoreCase)) { boxed = false; error = ""; return true; }
+                if (text == "1") { boxed = true; error = ""; return true; }
+                if (text == "0") { boxed = false; error = ""; return true; }
+                boxed = null; error = "expected bool (true/false/on/off/1/0)"; return false;
+            }
+            if (target == typeof(int))
+            {
+                if (int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var i))
+                { boxed = i; error = ""; return true; }
+                boxed = null; error = "expected int"; return false;
+            }
+            if (target == typeof(float))
+            {
+                if (float.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var f))
+                { boxed = f; error = ""; return true; }
+                boxed = null; error = "expected float"; return false;
+            }
+            // nullable support
+            var u = Nullable.GetUnderlyingType(target);
+            if (u != null)
+            {
+                if (string.Equals(text, "null", StringComparison.OrdinalIgnoreCase))
+                { boxed = null; error = ""; return true; }
+                if (TryConvert(text, u, out var inner, out error))
+                { boxed = inner; return true; }
+                boxed = null; return false;
+            }
+
+            // last resort
+            boxed = Convert.ChangeType(text, target, CultureInfo.InvariantCulture);
+            error = "";
+            return true;
+        }
+        catch (Exception ex)
+        {
+            boxed = null;
+            error = $"cannot convert '{text}' to {target.Name}: {ex.Message}";
+            return false;
+        }
+    }
+
+    private void ApplySideEffectsOnConfigChange(string key, object? before, object? after)
+    {
+        // Listener-affecting keys -> rehook immediately
+        if (key.StartsWith("Listen", StringComparison.OrdinalIgnoreCase)
+            || key.Equals(nameof(Configuration.RequireCallsign), StringComparison.OrdinalIgnoreCase)
+            || key.Equals(nameof(Configuration.Callsign), StringComparison.OrdinalIgnoreCase)
+            || key.Equals(nameof(Configuration.DebugListen), StringComparison.OrdinalIgnoreCase))
+        {
+            RehookListener();
+            ChatWindow.AppendSystem("[listener] rehooked.");
+        }
+
+        // IPC rebind when channel changes
+        if (key.Equals(nameof(Configuration.IpcChannelName), StringComparison.OrdinalIgnoreCase))
+        {
+            // Recreate the relay (acts like unbind+bind)
+            try { _ipcRelay?.Dispose(); } catch { }
+            _ipcRelay = new IpcChatRelay(PluginInterface, Log);
+
+            var name = Config.IpcChannelName;
+            if (!string.IsNullOrWhiteSpace(name))
+            {
+                var ok = _ipcRelay.Bind(name!);
+                ChatWindow.AppendSystem(ok ? $"[ipc] bound to '{name}'" : $"[ipc] failed to bind '{name}'");
+            }
+
+            // refresh broadcaster preference wiring
+            _broadcaster?.SetIpcRelay(_ipcRelay, Config.PreferIpcRelay);
+            return;
+        }
+
+        // IPC prefer toggle
+        if (key.Equals(nameof(Configuration.PreferIpcRelay), StringComparison.OrdinalIgnoreCase))
+        {
+            _broadcaster?.SetIpcRelay(_ipcRelay, Config.PreferIpcRelay);
+            ChatWindow.AppendSystem($"[ipc] prefer relay = {Config.PreferIpcRelay}");
+        }
+
+        // UI niceties
+        if (key.Equals(nameof(Configuration.StartOpen), StringComparison.OrdinalIgnoreCase) && after is bool b)
+            ChatWindow.IsOpen = b;
     }
 }
