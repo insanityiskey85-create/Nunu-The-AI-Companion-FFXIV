@@ -1,249 +1,286 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Numerics;
+using System.Text;
 using Dalamud.Interface.Windowing;
 using Dalamud.Bindings.ImGui;
-using NunuTheAICompanion.Services;
 
-namespace NunuTheAICompanion.UI;
-
-public sealed class ConfigWindow : Window
+namespace NunuTheAICompanion.UI
 {
-    private readonly Configuration _c;
-
-    public ConfigWindow(Configuration config)
-        : base("Nunu – Configuration", ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse)
+    /// <summary>
+    /// Settings window for Little Nunu using Dalamud.Bindings.ImGui (no ImGuiNET).
+    /// Covers backend, memory & Soul Threads, Songcraft, voice, listening, broadcast, IPC,
+    /// UI/window, images, search, and debug.
+    /// </summary>
+    public sealed class ConfigWindow : Window
     {
-        _c = config;
-        Size = new Vector2(720, 640);
-        SizeCondition = ImGuiCond.FirstUseEver;
-    }
+        private readonly Configuration _cfg;
 
-    public override void Draw()
-    {
-        ImGui.PushItemWidth(260);
+        // Reusable UTF-8 buffers per field label for InputText*
+        private readonly Dictionary<string, byte[]> _buffers = new(StringComparer.Ordinal);
 
-        if (ImGui.BeginTabBar("nunu_cfg_tabs"))
+        public ConfigWindow(Configuration cfg)
+            : base("Nunu — Configuration", ImGuiWindowFlags.None, true)
         {
-            if (ImGui.BeginTabItem("Backend")) { SectionBackend(); ImGui.EndTabItem(); }
-            if (ImGui.BeginTabItem("Listening")) { SectionListening(); ImGui.EndTabItem(); }
-            if (ImGui.BeginTabItem("Broadcast")) { SectionBroadcast(); ImGui.EndTabItem(); }
-            if (ImGui.BeginTabItem("Web Search")) { SectionSearch(); ImGui.EndTabItem(); }
-            if (ImGui.BeginTabItem("IPC")) { SectionIpc(); ImGui.EndTabItem(); }
-            if (ImGui.BeginTabItem("UI")) { SectionUi(); ImGui.EndTabItem(); }
-            if (ImGui.BeginTabItem("Images")) { SectionImages(); ImGui.EndTabItem(); }
-            if (ImGui.BeginTabItem("Voice")) { SectionVoice(); ImGui.EndTabItem(); }
+            _cfg = cfg;
+
+            SizeConstraints = new WindowSizeConstraints
+            {
+                MinimumSize = new Vector2(540, 440),
+                MaximumSize = new Vector2(float.MaxValue, float.MaxValue)
+            };
+
+            IsOpen = _cfg.StartOpen;
         }
 
-        ImGui.Separator();
-        if (ImGui.Button("Save All##nunu_cfg")) _c.Save();
-        ImGui.SameLine();
-        if (ImGui.Button("Rehook Listener")) PluginMain.Instance.RehookListener();
-        ImGui.SameLine();
-        if (ImGui.Button("Close")) IsOpen = false;
-
-        ImGui.PopItemWidth();
-    }
-
-    private void SectionBackend()
-    {
-        ImGui.TextUnformatted("Chat Backend (LLM)");
-        ImGui.Separator();
-
-        string[] modes = { "ollama", "openai", "proxy", "custom" };
-        int sel = Array.IndexOf(modes, _c.BackendMode);
-        if (sel < 0) sel = 0;
-        if (ImGui.Combo("Mode", ref sel, modes, modes.Length))
-        { _c.BackendMode = modes[sel]; _c.Save(); }
-
-        { var tmp = _c.BackendUrl ?? string.Empty; if (ImGui.InputText("Backend URL", ref tmp, 512)) { _c.BackendUrl = tmp; _c.Save(); } }
-        { var tmp = _c.ModelName ?? string.Empty; if (ImGui.InputText("Model Name", ref tmp, 128)) { _c.ModelName = tmp; _c.Save(); } }
-
-        { float t = _c.Temperature; if (ImGui.SliderFloat("Temperature", ref t, 0.0f, 1.5f, "%.2f")) { _c.Temperature = Math.Clamp(t, 0f, 2f); _c.Save(); } }
-
-        ImGui.TextUnformatted("System Prompt");
-        { var tmp = _c.SystemPrompt ?? string.Empty; if (ImGui.InputTextMultiline("##systemPrompt", ref tmp, 4000, new Vector2(-1, 120))) { _c.SystemPrompt = tmp; _c.Save(); } }
-    }
-
-    private void SectionListening()
-    {
-        ImGui.TextUnformatted("Listen to Game Chat");
-        ImGui.Separator();
-
-        { bool b = _c.ListenEnabled; if (ImGui.Checkbox("Enable listening", ref b)) { _c.ListenEnabled = b; _c.Save(); } }
-        ImGui.SameLine(); Help("(If off, Nunu only answers in her own window)");
-
-        { bool b = _c.RequireCallsign; if (ImGui.Checkbox("Require callsign", ref b)) { _c.RequireCallsign = b; _c.Save(); } }
-        ImGui.SameLine();
-        ImGui.SetNextItemWidth(160);
-        { var tmp = _c.Callsign ?? string.Empty; if (ImGui.InputText("Callsign", ref tmp, 64)) { _c.Callsign = tmp; _c.Save(); } }
-
-        { bool b = _c.ListenSelf; if (ImGui.Checkbox("Listen to my own messages", ref b)) { _c.ListenSelf = b; _c.Save(); } }
-
-        ImGui.Separator();
-        ImGui.TextUnformatted("Channels:");
-        { bool b = _c.ListenSay; if (ImGui.Checkbox("Say", ref b)) { _c.ListenSay = b; _c.Save(); } }
-        ImGui.SameLine();
-        { bool b = _c.ListenTell; if (ImGui.Checkbox("Tell", ref b)) { _c.ListenTell = b; _c.Save(); } }
-        ImGui.SameLine();
-        { bool b = _c.ListenParty; if (ImGui.Checkbox("Party", ref b)) { _c.ListenParty = b; _c.Save(); } }
-        ImGui.SameLine();
-        { bool b = _c.ListenAlliance; if (ImGui.Checkbox("Alliance", ref b)) { _c.ListenAlliance = b; _c.Save(); } }
-        ImGui.SameLine();
-        { bool b = _c.ListenFreeCompany; if (ImGui.Checkbox("Free Company", ref b)) { _c.ListenFreeCompany = b; _c.Save(); } }
-        ImGui.SameLine();
-        { bool b = _c.ListenShout; if (ImGui.Checkbox("Shout", ref b)) { _c.ListenShout = b; _c.Save(); } }
-        ImGui.SameLine();
-        { bool b = _c.ListenYell; if (ImGui.Checkbox("Yell", ref b)) { _c.ListenYell = b; _c.Save(); } }
-
-        ImGui.Separator();
-        { bool b = _c.DebugListen; if (ImGui.Checkbox("Mirror heard lines to Nunu window (debug)", ref b)) { _c.DebugListen = b; _c.Save(); } }
-    }
-
-    private void SectionBroadcast()
-    {
-        ImGui.TextUnformatted("Broadcast to Real Chat");
-        ImGui.Separator();
-
-        { bool b = _c.BroadcastAsPersona; if (ImGui.Checkbox("Prefix outgoing lines with persona name", ref b)) { _c.BroadcastAsPersona = b; _c.Save(); } }
-        { var tmp = _c.PersonaName ?? string.Empty; if (ImGui.InputText("Persona Name", ref tmp, 128)) { _c.PersonaName = tmp; _c.Save(); } }
-
-        ImGui.Spacing();
-        ImGui.TextDisabled("Tip: /nunuspeak on  &  /nunuchan say|party|fc|shout|yell");
-    }
-
-    private void SectionSearch()
-    {
-        ImGui.TextUnformatted("Web Search Tool");
-        ImGui.Separator();
-
-        string[] engines = { "serpapi", "none" };
-        int sel = Array.IndexOf(engines, _c.SearchBackend);
-        if (sel < 0) sel = 0;
-        if (ImGui.Combo("Backend", ref sel, engines, engines.Length))
-        { _c.SearchBackend = engines[sel]; _c.Save(); }
-
-        { bool b = _c.AllowInternet; if (ImGui.Checkbox("Allow internet lookups", ref b)) { _c.AllowInternet = b; _c.Save(); } }
-
-        { var tmp = _c.SearchApiKey ?? string.Empty; if (ImGui.InputText("API Key", ref tmp, 256)) { _c.SearchApiKey = tmp; _c.Save(); } }
-
-        { int v = _c.SearchMaxResults; if (ImGui.SliderInt("Max Results", ref v, 1, 10)) { _c.SearchMaxResults = Math.Clamp(v, 1, 10); _c.Save(); } }
-        { int v = _c.SearchTimeoutSec; if (ImGui.SliderInt("Timeout (sec)", ref v, 5, 120)) { _c.SearchTimeoutSec = Math.Clamp(v, 5, 600); _c.Save(); } }
-    }
-
-    private void SectionIpc()
-    {
-        ImGui.TextUnformatted("IPC / External Relay");
-        ImGui.Separator();
-
-        { var tmp = _c.IpcChannelName ?? string.Empty; if (ImGui.InputText("Channel Name", ref tmp, 64)) { _c.IpcChannelName = tmp; _c.Save(); } }
-
-        { bool b = _c.PreferIpcRelay; if (ImGui.Checkbox("Prefer IPC relay over ProcessCommand", ref b)) { _c.PreferIpcRelay = b; _c.Save(); } }
-
-        ImGui.Spacing();
-        if (ImGui.Button("Bind IPC Now"))
+        public override void Draw()
         {
-            var ok = new IpcChatRelay(PluginMain.PluginInterface, PluginMain.Log).Bind(_c.IpcChannelName);
-            PluginMain.Instance?.ChatWindow?.AppendAssistant(ok
-                ? $"[ipc] bound to '{_c.IpcChannelName}'"
-                : $"[ipc] failed to bind '{_c.IpcChannelName}'");
-        }
-    }
+            if (ImGui.BeginTabBar("nunu_cfg_tabs"))
+            {
+                if (ImGui.BeginTabItem("Backend")) { DrawBackend(); ImGui.EndTabItem(); }
+                if (ImGui.BeginTabItem("Memory")) { DrawMemory(); ImGui.EndTabItem(); }
+                if (ImGui.BeginTabItem("Songcraft")) { DrawSongcraft(); ImGui.EndTabItem(); }
+                if (ImGui.BeginTabItem("Voice")) { DrawVoice(); ImGui.EndTabItem(); }
+                if (ImGui.BeginTabItem("Listen")) { DrawListen(); ImGui.EndTabItem(); }
+                if (ImGui.BeginTabItem("Broadcast")) { DrawBroadcastIpc(); ImGui.EndTabItem(); }
+                if (ImGui.BeginTabItem("UI")) { DrawUi(); ImGui.EndTabItem(); }
+                if (ImGui.BeginTabItem("Images")) { DrawImages(); ImGui.EndTabItem(); }
+                if (ImGui.BeginTabItem("Search")) { DrawSearch(); ImGui.EndTabItem(); }
+                if (ImGui.BeginTabItem("Debug")) { DrawDebug(); ImGui.EndTabItem(); }
+                ImGui.EndTabBar();
+            }
 
-    private void SectionUi()
-    {
-        ImGui.TextUnformatted("UI Preferences");
-        ImGui.Separator();
-
-        { bool b = _c.StartOpen; if (ImGui.Checkbox("Open Nunu window on load", ref b)) { _c.StartOpen = b; _c.Save(); } }
-
-        { float f = _c.WindowOpacity; if (ImGui.SliderFloat("Window Opacity", ref f, 0.25f, 1.0f, "%.2f")) { _c.WindowOpacity = MathF.Round(Math.Clamp(f, 0.25f, 1f), 2); _c.Save(); } }
-
-        { var tmp = _c.ChatDisplayName ?? string.Empty; if (ImGui.InputText("Your Display Name (UI only)", ref tmp, 128)) { _c.ChatDisplayName = tmp; _c.Save(); } }
-
-        { bool b = _c.AsciiSafe; if (ImGui.Checkbox("ASCII-safe output (strip non-ASCII)", ref b)) { _c.AsciiSafe = b; _c.Save(); } }
-        { bool b = _c.TwoPaneMode; if (ImGui.Checkbox("Two-pane mode (you vs assistant)", ref b)) { _c.TwoPaneMode = b; _c.Save(); } }
-        { bool b = _c.ShowCopyButtons; if (ImGui.Checkbox("Show copy buttons on assistant messages", ref b)) { _c.ShowCopyButtons = b; _c.Save(); } }
-
-        { float fs = _c.FontScale; if (ImGui.SliderFloat("Font Scale", ref fs, 0.8f, 1.6f, "%.2f")) { _c.FontScale = MathF.Round(Math.Clamp(fs, 0.6f, 2f), 2); _c.Save(); } }
-
-        { bool b = _c.LockWindow; if (ImGui.Checkbox("Lock window", ref b)) { _c.LockWindow = b; _c.Save(); } }
-    }
-
-    private void SectionImages()
-    {
-        ImGui.TextUnformatted("Image / Atelier");
-        ImGui.Separator();
-
-        string[] backends = { "sdwebui", "none" };
-        int sel = Array.IndexOf(backends, _c.ImageBackend);
-        if (sel < 0) sel = 0;
-        if (ImGui.Combo("Image Backend", ref sel, backends, backends.Length))
-        { _c.ImageBackend = backends[sel]; _c.Save(); }
-
-        { var tmp = _c.ImageBaseUrl ?? string.Empty; if (ImGui.InputText("Base URL", ref tmp, 256)) { _c.ImageBaseUrl = tmp; _c.Save(); } }
-        { var tmp = _c.ImageModel ?? string.Empty; if (ImGui.InputText("Model", ref tmp, 128)) { _c.ImageModel = tmp; _c.Save(); } }
-
-        { int v = _c.ImageSteps; if (ImGui.SliderInt("Steps", ref v, 5, 150)) { _c.ImageSteps = Math.Clamp(v, 1, 300); _c.Save(); } }
-        { float f = _c.ImageGuidance; if (ImGui.SliderFloat("Guidance (CFG)", ref f, 1.0f, 20.0f, "%.1f")) { _c.ImageGuidance = Math.Clamp(f, 0.1f, 50f); _c.Save(); } }
-
-        { int w = _c.ImageWidth; if (ImGui.InputInt("Width", ref w)) { _c.ImageWidth = Math.Clamp(w, 64, 2048); _c.Save(); } }
-        ImGui.SameLine();
-        { int h = _c.ImageHeight; if (ImGui.InputInt("Height", ref h)) { _c.ImageHeight = Math.Clamp(h, 64, 2048); _c.Save(); } }
-
-        { var tmp = _c.ImageSampler ?? string.Empty; if (ImGui.InputText("Sampler", ref tmp, 128)) { _c.ImageSampler = tmp; _c.Save(); } }
-        { int seed = _c.ImageSeed; if (ImGui.InputInt("Seed (-1 random)", ref seed)) { _c.ImageSeed = seed; _c.Save(); } }
-        { int to = _c.ImageTimeoutSec; if (ImGui.SliderInt("Timeout (sec)", ref to, 10, 600)) { _c.ImageTimeoutSec = Math.Clamp(to, 5, 3600); _c.Save(); } }
-
-        { bool b = _c.SaveImages; if (ImGui.Checkbox("Save generated images", ref b)) { _c.SaveImages = b; _c.Save(); } }
-        { var tmp = _c.ImageSaveSubdir ?? string.Empty; if (ImGui.InputText("Save subfolder (under plugin config dir)", ref tmp, 128)) { _c.ImageSaveSubdir = tmp; _c.Save(); } }
-    }
-
-    private void SectionVoice()
-    {
-        ImGui.TextUnformatted("Text-to-Speech (TTS)");
-        ImGui.Separator();
-
-        { bool b = _c.VoiceSpeakEnabled; if (ImGui.Checkbox("Speak Nunu's replies", ref b)) { _c.VoiceSpeakEnabled = b; _c.Save(); } }
-        { bool b = _c.VoiceOnlyWhenWindowFocused; if (ImGui.Checkbox("Only speak when Nunu window is open", ref b)) { _c.VoiceOnlyWhenWindowFocused = b; _c.Save(); } }
-
-        { int v = _c.VoiceVolume; if (ImGui.SliderInt("Volume", ref v, 0, 100)) { _c.VoiceVolume = Math.Clamp(v, 0, 100); _c.Save(); } }
-        { int v = _c.VoiceRate; if (ImGui.SliderInt("Rate", ref v, -10, 10)) { _c.VoiceRate = Math.Clamp(v, -10, 10); _c.Save(); } }
-
-        if (ImGui.Button("Save Voice Settings")) _c.Save();
-
-        ImGui.Spacing();
-        ImGui.TextUnformatted("Installed Voices (Windows)");
-        if (ImGui.Button("List Voices"))
-        {
-            var list = PluginMain.Instance.Voice?.ListVoices() ?? Array.Empty<string>();
-            var joined = list.Count == 0 ? "(none detected)" : string.Join(", ", list);
-            PluginMain.Instance.ChatWindow.AppendAssistant($"[voices] {joined}");
+            ImGui.Separator();
+            if (ImGui.Button("Save & Apply", new Vector2(160, 0)))
+            {
+                _cfg.Save();
+                PluginMain.Instance.RehookListener(); // apply listen changes immediately
+            }
+            ImGui.SameLine();
+            ImGui.TextDisabled("Changes are saved to disk; some settings take effect instantly.");
         }
 
-        { var tmp = _c.VoiceName ?? string.Empty; if (ImGui.InputText("Preferred Voice Name", ref tmp, 128)) { _c.VoiceName = tmp; _c.Save(); } }
-        ImGui.SameLine();
-        if (ImGui.Button("Try Select"))
+        // ---------- Tabs ----------
+
+        private void DrawBackend()
         {
-            var ok = PluginMain.Instance.Voice?.TrySelectVoice(_c.VoiceName) ?? false;
-            PluginMain.Instance.ChatWindow.AppendAssistant(ok ? $"[voice] selected '{_c.VoiceName}'" : $"[voice] failed for '{_c.VoiceName}'");
+            ImGui.Text("Chat Backend");
+            InputTextProp("Mode (label)", _cfg.BackendMode, v => _cfg.BackendMode = v);
+            InputTextProp("Endpoint URL", _cfg.BackendUrl, v => _cfg.BackendUrl = v);
+            InputTextProp("Model", _cfg.ModelName, v => _cfg.ModelName = v);
+            SliderFloatProp("Temperature", _cfg.Temperature, v => _cfg.Temperature = v, 0.0f, 2.0f);
+            InputTextMultilineProp("System Prompt", _cfg.SystemPrompt, v => _cfg.SystemPrompt = v, new Vector2(-1, 120));
+
+            ImGui.Separator();
+            InputTextProp("Chat Display Name", _cfg.ChatDisplayName, v => _cfg.ChatDisplayName = v);
         }
 
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.TextUnformatted("Speech-to-Text (planned)");
-        ImGui.TextDisabled("Backends: Azure / Whisper local / Windows speech. (Next patch.)");
-    }
-
-    private static void Help(string text)
-    {
-        ImGui.SameLine(); ImGui.TextDisabled("(?)");
-        if (ImGui.IsItemHovered())
+        private void DrawMemory()
         {
-            ImGui.BeginTooltip();
-            ImGui.PushTextWrapPos(ImGui.GetFontSize() * 32f);
-            ImGui.TextUnformatted(text);
-            ImGui.PopTextWrapPos();
-            ImGui.EndTooltip();
+            CheckboxProp("Enable Soul Threads (topic-aware memory)", _cfg.SoulThreadsEnabled, v => _cfg.SoulThreadsEnabled = v);
+            SliderIntProp("Recent Context (ContextTurns)", _cfg.ContextTurns, v => _cfg.ContextTurns = v, 0, 64);
+            InputTextProp("Embedding Model", _cfg.EmbeddingModel ?? string.Empty, v => _cfg.EmbeddingModel = v);
+            SliderFloatProp("Thread Similarity Threshold", _cfg.ThreadSimilarityThreshold, v => _cfg.ThreadSimilarityThreshold = v, 0.3f, 0.95f);
+            SliderIntProp("Max from Matching Thread", _cfg.ThreadContextMaxFromThread, v => _cfg.ThreadContextMaxFromThread = v, 0, 16);
+            SliderIntProp("Max Recent (always include)", _cfg.ThreadContextMaxRecent, v => _cfg.ThreadContextMaxRecent = v, 0, 32);
+
+            ImGui.Separator();
+            ImGui.TextWrapped("Soul Threads weaves older, thematically similar memories into the prompt alongside recent turns.");
+        }
+
+        private void DrawSongcraft()
+        {
+            CheckboxProp("Enable Songcraft (MIDI generation)", _cfg.SongcraftEnabled, v => _cfg.SongcraftEnabled = v);
+            InputTextProp("Bard-Call Trigger", _cfg.SongcraftBardCallTrigger ?? "/song", v => _cfg.SongcraftBardCallTrigger = v);
+            InputTextProp("Key (e.g., C4, D#3)", _cfg.SongcraftKey ?? "C4", v => _cfg.SongcraftKey = v);
+            SliderIntProp("Tempo (BPM)", _cfg.SongcraftTempoBpm, v => _cfg.SongcraftTempoBpm = v, 40, 200);
+            SliderIntProp("Bars", _cfg.SongcraftBars, v => _cfg.SongcraftBars = v, 2, 64);
+            SliderIntProp("Program (GM 0..127)", _cfg.SongcraftProgram, v => _cfg.SongcraftProgram = v, 0, 127);
+
+            var saveDir = _cfg.SongcraftSaveDir ?? string.Empty;
+            if (InputTextProp("Save Directory (blank = Memories)", saveDir, v => saveDir = v))
+                _cfg.SongcraftSaveDir = string.IsNullOrWhiteSpace(saveDir) ? null : saveDir;
+
+            ImGui.Separator();
+            ImGui.TextWrapped("Type '@nunu /song sorrow hush the storm' to compose on demand.");
+        }
+
+        private void DrawVoice()
+        {
+            CheckboxProp("Speak replies (TTS)", _cfg.VoiceSpeakEnabled, v => _cfg.VoiceSpeakEnabled = v);
+            InputTextProp("Voice Name (optional)", _cfg.VoiceName ?? string.Empty, v => _cfg.VoiceName = v);
+            SliderIntProp("Rate", _cfg.VoiceRate, v => _cfg.VoiceRate = v, -10, 10);
+            SliderIntProp("Volume", _cfg.VoiceVolume, v => _cfg.VoiceVolume = v, 0, 100);
+            CheckboxProp("Speak only when Chat window focused", _cfg.VoiceOnlyWhenWindowFocused, v => _cfg.VoiceOnlyWhenWindowFocused = v);
+        }
+
+        private void DrawListen()
+        {
+            bool changed = false;
+            changed |= CheckboxProp("Enable Listening", _cfg.ListenEnabled, v => _cfg.ListenEnabled = v);
+            changed |= CheckboxProp("Listen to Self", _cfg.ListenSelf, v => _cfg.ListenSelf = v);
+            changed |= CheckboxProp("Listen: /say", _cfg.ListenSay, v => _cfg.ListenSay = v);
+            changed |= CheckboxProp("Listen: /tell", _cfg.ListenTell, v => _cfg.ListenTell = v);
+            changed |= CheckboxProp("Listen: /party", _cfg.ListenParty, v => _cfg.ListenParty = v);
+            changed |= CheckboxProp("Listen: /alliance", _cfg.ListenAlliance, v => _cfg.ListenAlliance = v);
+            changed |= CheckboxProp("Listen: /fc", _cfg.ListenFreeCompany, v => _cfg.ListenFreeCompany = v);
+            changed |= CheckboxProp("Listen: /shout", _cfg.ListenShout, v => _cfg.ListenShout = v);
+            changed |= CheckboxProp("Listen: /yell", _cfg.ListenYell, v => _cfg.ListenYell = v);
+
+            ImGui.Separator();
+            changed |= CheckboxProp("Require Callsign in message", _cfg.RequireCallsign, v => _cfg.RequireCallsign = v);
+            InputTextProp("Callsign (e.g., @nunu)", _cfg.Callsign ?? "@nunu", v => _cfg.Callsign = v);
+            ImGui.TextDisabled("When required, Nunu only responds if the message contains this callsign.");
+
+            if (changed)
+                PluginMain.Instance.RehookListener();
+        }
+
+        private void DrawBroadcastIpc()
+        {
+            ImGui.Text("Broadcast");
+            CheckboxProp("Prefix outgoing lines with persona", _cfg.BroadcastAsPersona, v => _cfg.BroadcastAsPersona = v);
+            InputTextProp("Persona Name", _cfg.PersonaName ?? "Little Nunu", v => _cfg.PersonaName = v);
+
+            ImGui.Separator();
+            ImGui.Text("IPC Relay");
+            InputTextProp("Channel Name", _cfg.IpcChannelName ?? string.Empty, v => _cfg.IpcChannelName = v);
+            CheckboxProp("Prefer IPC Relay (when bound)", _cfg.PreferIpcRelay, v => _cfg.PreferIpcRelay = v);
+
+            ImGui.Separator();
+            if (ImGui.Button("Rebind IPC"))
+                PluginMain.Instance.RehookListener();
+        }
+
+        private void DrawUi()
+        {
+            CheckboxProp("Open Chat Window on start", _cfg.StartOpen, v => _cfg.StartOpen = v);
+            SliderFloatProp("Window Opacity", _cfg.WindowOpacity, v => _cfg.WindowOpacity = v, 0.25f, 1.0f);
+            CheckboxProp("ASCII-safe broadcast (strip non-ASCII)", _cfg.AsciiSafe, v => _cfg.AsciiSafe = v);
+            CheckboxProp("Two-pane mode", _cfg.TwoPaneMode, v => _cfg.TwoPaneMode = v);
+            CheckboxProp("Show copy buttons", _cfg.ShowCopyButtons, v => _cfg.ShowCopyButtons = v);
+            SliderFloatProp("Font Scale", _cfg.FontScale, v => _cfg.FontScale = v, 0.75f, 1.5f);
+            CheckboxProp("Lock Chat Window", _cfg.LockWindow, v => _cfg.LockWindow = v);
+        }
+
+        private void DrawImages()
+        {
+            InputTextProp("Image Backend (e.g., none, a1111, comfy)", _cfg.ImageBackend ?? "none", v => _cfg.ImageBackend = v);
+            InputTextProp("Base URL", _cfg.ImageBaseUrl ?? "http://127.0.0.1:7860", v => _cfg.ImageBaseUrl = v);
+            InputTextProp("Model", _cfg.ImageModel ?? "stable-diffusion-1.5", v => _cfg.ImageModel = v);
+            SliderIntProp("Steps", _cfg.ImageSteps, v => _cfg.ImageSteps = v, 1, 150);
+            SliderFloatProp("Guidance (CFG)", _cfg.ImageGuidance, v => _cfg.ImageGuidance = v, 1.0f, 20.0f);
+            SliderIntProp("Width", _cfg.ImageWidth, v => _cfg.ImageWidth = v, 64, 2048);
+            SliderIntProp("Height", _cfg.ImageHeight, v => _cfg.ImageHeight = v, 64, 2048);
+            InputTextProp("Sampler", _cfg.ImageSampler ?? "Euler a", v => _cfg.ImageSampler = v);
+            SliderIntProp("Seed (-1=random)", _cfg.ImageSeed, v => _cfg.ImageSeed = v, -1, int.MaxValue);
+            SliderIntProp("Request Timeout (s)", _cfg.ImageTimeoutSec, v => _cfg.ImageTimeoutSec = v, 5, 300);
+            CheckboxProp("Save Images", _cfg.SaveImages, v => _cfg.SaveImages = v);
+            InputTextProp("Save Subfolder", _cfg.ImageSaveSubdir ?? "Images", v => _cfg.ImageSaveSubdir = v);
+        }
+
+        private void DrawSearch()
+        {
+            CheckboxProp("Allow Internet Access", _cfg.AllowInternet, v => _cfg.AllowInternet = v);
+            InputTextProp("Search Backend", _cfg.SearchBackend ?? "serpapi", v => _cfg.SearchBackend = v);
+            InputTextProp("Search API Key", _cfg.SearchApiKey ?? string.Empty, v => _cfg.SearchApiKey = v);
+            SliderIntProp("Max Results", _cfg.SearchMaxResults, v => _cfg.SearchMaxResults = v, 1, 50);
+            SliderIntProp("Timeout (s)", _cfg.SearchTimeoutSec, v => _cfg.SearchTimeoutSec = v, 5, 120);
+        }
+
+        private void DrawDebug()
+        {
+            CheckboxProp("Mirror listener debug to Chat window", _cfg.DebugMirrorToWindow, v => _cfg.DebugMirrorToWindow = v);
+            CheckboxProp("Verbose listen debug", _cfg.DebugListen, v => _cfg.DebugListen = v);
+            ImGui.Separator();
+            if (ImGui.Button("Rehook Listener Now"))
+                PluginMain.Instance.RehookListener();
+        }
+
+        // ---------- Helper wrappers (Dalamud.Bindings.ImGui with UTF-8 buffers) ----------
+
+        private bool InputTextProp(string label, string value, Action<string> setter, int maxBytes = 2048)
+        {
+            var buf = GetBuffer(label, value, maxBytes);
+            var changed = ImGui.InputText(label, buf, ImGuiInputTextFlags.None);
+            if (changed)
+            {
+                var text = BytesToString(buf);
+                setter(text);
+            }
+            return changed;
+        }
+
+        private bool InputTextMultilineProp(string label, string value, Action<string> setter, Vector2 size, int maxBytes = 4096)
+        {
+            var buf = GetBuffer(label, value, maxBytes);
+            var changed = ImGui.InputTextMultiline(label, buf, size, ImGuiInputTextFlags.None);
+            if (changed)
+            {
+                var text = BytesToString(buf);
+                setter(text);
+            }
+            return changed;
+        }
+
+        private static bool CheckboxProp(string label, bool value, Action<bool> setter)
+        {
+            var v = value;
+            var changed = ImGui.Checkbox(label, ref v);
+            if (changed) setter(v);
+            return changed;
+        }
+
+        private static bool SliderIntProp(string label, int value, Action<int> setter, int min, int max)
+        {
+            var v = value;
+            var changed = ImGui.SliderInt(label, ref v, min, max);
+            if (changed) setter(v);
+            return changed;
+        }
+
+        private static bool SliderFloatProp(string label, float value, Action<float> setter, float min, float max)
+        {
+            var v = value;
+            var changed = ImGui.SliderFloat(label, ref v, min, max);
+            if (changed) setter(v);
+            return changed;
+        }
+
+        // ---------- UTF-8 buffer helpers ----------
+
+        private byte[] GetBuffer(string key, string text, int size)
+        {
+            if (!_buffers.TryGetValue(key, out var buf) || buf.Length != size)
+            {
+                buf = new byte[size];
+                _buffers[key] = buf;
+            }
+
+            // write UTF-8 into buffer with proper NUL termination
+            Array.Clear(buf, 0, buf.Length);
+            if (!string.IsNullOrEmpty(text))
+            {
+                var maxPayload = size - 1; // last byte reserved for NUL
+                var bytes = Encoding.UTF8.GetBytes(text);
+                var len = Math.Min(bytes.Length, maxPayload);
+                Array.Copy(bytes, buf, len);
+                buf[len] = 0; // NUL
+            }
+            else
+            {
+                buf[0] = 0;
+            }
+
+            return buf;
+        }
+
+        private static string BytesToString(byte[] buf)
+        {
+            // find first NUL
+            var len = Array.IndexOf(buf, (byte)0);
+            if (len < 0) len = buf.Length;
+            return Encoding.UTF8.GetString(buf, 0, len);
         }
     }
 }
