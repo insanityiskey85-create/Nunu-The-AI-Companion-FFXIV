@@ -7,46 +7,46 @@ namespace NunuTheAICompanion;
 
 public sealed class Configuration : Dalamud.Configuration.IPluginConfiguration
 {
-    public int Version { get; set; } = 5;
+    public int Version { get; set; } = 6;
 
     // -------- Backend --------
     public string BackendMode { get; set; } = "ollama";
-    public string BackendUrl { get; set; } = "http://127.0.0.1:11434/api/chat";
+    public string BackendUrl { get; set; } = "http://127.0.0.1:11434";
     public string ModelName { get; set; } = "nunu-8b";
     public float Temperature { get; set; } = 0.7f;
     public string SystemPrompt { get; set; } =
         "You are Little Nunu, the Soul Weeper. Stay in FFXIV voice; be helpful and kind.";
-    public string ChatDisplayName { get; set; } = "Real Nunu";
+    public string ChatDisplayName { get; set; } = "Real Nunu @Architect";
 
-    // --- Endpoints (compat with older services) ---
+    // Compat endpoints for other services
     public string ChatEndpointUrl { get; set; } = "http://127.0.0.1:11434/api/chat";
     public string EmbeddingEndpointUrl { get; set; } = "http://127.0.0.1:11434/api/embeddings";
 
     // -------- Memory / Soul Threads --------
     public bool SoulThreadsEnabled { get; set; } = true;
-    public int ContextTurns { get; set; } = 64;
+    public int ContextTurns { get; set; } = 12;
     public string? EmbeddingModel { get; set; } = "nomic-embed-text";
     public float ThreadSimilarityThreshold { get; set; } = 0.72f;
-    public int ThreadContextMaxFromThread { get; set; } = 16;
-    public int ThreadContextMaxRecent { get; set; } = 32;
+    public int ThreadContextMaxFromThread { get; set; } = 8;
+    public int ThreadContextMaxRecent { get; set; } = 4;
 
     // -------- Songcraft --------
     public bool SongcraftEnabled { get; set; } = true;
     public string SongcraftBardCallTrigger { get; set; } = "/song";
-    public string SongcraftKey { get; set; } = "C3,C6";
+    public string SongcraftKey { get; set; } = "C4";
     public int SongcraftTempoBpm { get; set; } = 96;
     public int SongcraftBars { get; set; } = 8;
-    public int SongcraftProgram { get; set; } = 0; // GM 0..127
+    public int SongcraftProgram { get; set; } = 0;
     public string? SongcraftSaveDir { get; set; } = null;
 
     // -------- Voice --------
-    public bool VoiceSpeakEnabled { get; set; } = false;
+    public bool VoiceSpeakEnabled { get; set; } = true;
     public string? VoiceName { get; set; }
     public int VoiceRate { get; set; } = 0;     // -10..10
     public int VoiceVolume { get; set; } = 100; // 0..100
     public bool VoiceOnlyWhenWindowFocused { get; set; } = false;
 
-    // -------- Listen (inbound chat) --------
+    // -------- Listen --------
     public bool ListenEnabled { get; set; } = true;
     public bool ListenSelf { get; set; } = true;
     public bool ListenSay { get; set; } = true;
@@ -59,7 +59,7 @@ public sealed class Configuration : Dalamud.Configuration.IPluginConfiguration
     public bool RequireCallsign { get; set; } = true;
     public string Callsign { get; set; } = "@Little Nunu";
 
-    // ---- Whitelist for allowed authors ----
+    // ---- Whitelist ----
     public List<string> Whitelist { get; set; } = new List<string>();
     public bool IsWhitelisted(string author)
     {
@@ -72,19 +72,25 @@ public sealed class Configuration : Dalamud.Configuration.IPluginConfiguration
     public string PersonaName { get; set; } = "Little Nunu";
     public string? IpcChannelName { get; set; } = string.Empty;
     public bool PreferIpcRelay { get; set; } = true;
-
-    // Preferred outgoing channel: Say, Party, Shout, Yell, FreeCompany, Echo
     public string EchoChannel { get; set; } = "Say";
 
-    // -------- Typing Indicator (NEW) --------
+    // -------- Typing Indicator --------
     public bool TypingIndicatorEnabled { get; set; } = true;
-    public string TypingIndicatorMessage { get; set; } = "Little Nunu is writing ....";
-    public bool TypingIndicatorSendDone { get; set; } = true;
+    public string TypingIndicatorMessage { get; set; } = "Little Nunu is writing ....Please wait to send another message Patience is a virtue! WAH!";
+    public bool TypingIndicatorSendDone { get; set; } = false;
     public string TypingIndicatorDoneMessage { get; set; } = "…done.";
+
+    // -------- Emotion Engine (NEW) --------
+    public bool EmotionEnabled { get; set; } = true;
+    public bool EmotionEmitEmote { get; set; } = true;            // send /em lines on change
+    public bool EmotionPromptMarkersEnabled { get; set; } = true; // model can send (emotion: X)
+    public int EmotionDecaySeconds { get; set; } = 120;           // revert to Neutral after idle
+    public string EmotionDefault { get; set; } = "Neutral";       // initial state
+    public bool EmotionLock { get; set; } = false;                // prevent auto-changes
 
     // -------- UI --------
     public bool StartOpen { get; set; } = true;
-    public float WindowOpacity { get; set; } = 1.0f; // 0.25..1.0
+    public float WindowOpacity { get; set; } = 1.0f;
     public bool AsciiSafe { get; set; } = true;
     public bool TwoPaneMode { get; set; } = true;
     public bool ShowCopyButtons { get; set; } = true;
@@ -109,8 +115,8 @@ public sealed class Configuration : Dalamud.Configuration.IPluginConfiguration
     public bool AllowInternet { get; set; } = true;
     public string SearchBackend { get; set; } = "serpapi";
     public string SearchApiKey { get; set; } = "a7913350a7306681a9dc0546e1e9ba2372930f19da59b8b444f96e2a22f77e63";
-    public int SearchMaxResults { get; set; } = 50;
-    public int SearchTimeoutSec { get; set; } = 120;
+    public int SearchMaxResults { get; set; } = 5;
+    public int SearchTimeoutSec { get; set; } = 20;
 
     // -------- Debug --------
     public bool DebugMirrorToWindow { get; set; } = true;

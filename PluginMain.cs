@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Net.Http;
 using System.Numerics;
 using System.Reflection;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Dalamud.Game.Command;
@@ -49,7 +50,7 @@ namespace NunuTheAICompanion
         private IpcChatRelay? _ipcRelay;
         private ChatListener? _listener;
 
-        // Broadcast echo channel (default overridden by Config on load)
+        // Broadcast echo (overridden by Config)
         internal ChatBroadcaster.NunuChannel _echoChannel = ChatBroadcaster.NunuChannel.Party;
 
         // Commands
@@ -61,17 +62,26 @@ namespace NunuTheAICompanion
         private SongcraftService? _songcraft;
         private IPluginLog? _songLog;
 
-        // UI draw hooks
+        // UiBuilder hooks & streaming flag
         private bool _uiHooksBound;
         private bool _isStreaming;
 
         // Typing Indicator
         private bool _typingActive;
 
+        // ===== Emotion Engine =====
+        private EmotionManager _emotions = new EmotionManager();
+        private DateTime _lastEmotionChangeUtc = DateTime.UtcNow;
+
+        private static readonly Regex EmotionMarker = new Regex(
+            @"[\(\[]\s*emotion\s*:\s*([a-zA-Z]+)\s*[\)\]]",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
         public PluginMain()
         {
             Instance = this;
 
+            // No timeout; we cancel via CTS while streaming.
             _http.Timeout = Timeout.InfiniteTimeSpan;
 
             // ---- Config
@@ -99,7 +109,12 @@ namespace NunuTheAICompanion
             ConfigWindow = new ConfigWindow(Config);
             WindowSystem.AddWindow(ConfigWindow);
 
-            try { MemoryWindow = new MemoryWindow(Config, Memory, Log); WindowSystem.AddWindow(MemoryWindow); } catch { }
+            try
+            {
+                MemoryWindow = new MemoryWindow(Config, Memory, Log);
+                WindowSystem.AddWindow(MemoryWindow);
+            }
+            catch { /* optional window differences are fine */ }
 
             // ---- UiBuilder hooks
             if (!_uiHooksBound)
@@ -110,14 +125,15 @@ namespace NunuTheAICompanion
                 _uiHooksBound = true;
             }
 
-            if (Config.StartOpen) ChatWindow.IsOpen = true;
+            if (Config.StartOpen)
+                ChatWindow.IsOpen = true;
 
             // ---- Broadcaster (native + IPC)
             _broadcaster = new ChatBroadcaster(CommandManager, Framework, Log) { Enabled = true };
             NativeChatSender.Initialize(this, PluginInterface, Log);
             _broadcaster.SetNativeSender(full => NativeChatSender.TrySendFull(full));
 
-            // ---- IPC relay
+            // ---- IPC relay (create & bind if configured)
             _ipcRelay = new IpcChatRelay(PluginInterface, Log);
             if (!string.IsNullOrWhiteSpace(Config.IpcChannelName))
             {
@@ -134,12 +150,15 @@ namespace NunuTheAICompanion
                 HelpMessage = "Toggle Nunu. '/nunu help' for usage."
             });
 
-            // ---- Listener
+            // ---- Listener (inbound chat)
             RehookListener();
 
             // ---- Soul Threads + Songcraft
             InitializeSoulThreads(_http, Log);
             InitializeSongcraft(Log);
+
+            // ---- Emotion Engine
+            InitializeEmotionEngine();
 
             // ---- Greeting
             ChatWindow.AppendAssistant("Nunu is awake. Ask me anything—or play me a memory.");
@@ -171,7 +190,19 @@ namespace NunuTheAICompanion
         }
 
         // ===== UiBuilder handlers =====
-        private void DrawUi() => WindowSystem.Draw();
+        private void DrawUi()
+        {
+            // Emotion decay (neutral drift on idle)
+            if (Config.EmotionEnabled && Config.EmotionDecaySeconds > 0 && !_emotions.Locked)
+            {
+                var idle = (DateTime.UtcNow - _lastEmotionChangeUtc).TotalSeconds;
+                if (idle >= Config.EmotionDecaySeconds && _emotions.Current != NunuEmotion.Neutral)
+                    SafeSetEmotion(NunuEmotion.Neutral, reason: "decay");
+            }
+
+            WindowSystem.Draw();
+        }
+
         private void OpenConfigUi() => ConfigWindow.IsOpen = true;
         private void OpenMainUi() => ChatWindow.IsOpen = true;
 
@@ -185,128 +216,12 @@ namespace NunuTheAICompanion
             _listener = new ChatListener(
                 ChatGui, Log, Config,
                 onHeard: OnHeardFromChat,
-                mirrorDebugToWindow: s => { if (Config.DebugMirrorToWindow) ChatWindow.AppendSystem(s); });
+                mirrorDebugToWindow: s =>
+                {
+                    if (Config.DebugMirrorToWindow)
+                        ChatWindow.AppendSystem(s);
+                });
             Log.Info("[Listener] rehooked with latest configuration.");
-        }
-
-        // ===== Inbound path =====
-        private void OnHeardFromChat(string author, string text)
-        {
-            if (TryHandleBardCall(author, text))
-                return;
-
-            HandleUserSend(text);
-        }
-
-        private void HandleUserSend(string text)
-        {
-            try
-            {
-                var who = string.IsNullOrWhiteSpace(Config.ChatDisplayName) ? "You" : Config.ChatDisplayName;
-                OnUserUtterance(who, text, CancellationToken.None);
-            }
-            catch { }
-
-            // Typing indicator at the moment streaming starts
-            StartTypingIndicator();
-
-            ChatWindow.BeginAssistantStream();
-
-            var request = BuildContext(text, CancellationToken.None);
-            request.Add(("user", text));
-
-            _ = StreamAssistantAsync(request);
-        }
-
-        // ===== Streaming model loop =====
-        private async Task StreamAssistantAsync(List<(string role, string content)> history)
-        {
-            if (_isStreaming) return;
-            _isStreaming = true;
-
-            var cts = new CancellationTokenSource();
-            string reply = "";
-            try
-            {
-                var chat = new List<(string role, string content)>(history);
-
-                if (!string.IsNullOrWhiteSpace(Config.SystemPrompt))
-                    chat.Insert(0, ("system", Config.SystemPrompt));
-
-                var client = new OllamaClient(_http, Config);
-
-                await foreach (var chunk in client.StreamChatAsync(Config.BackendUrl, chat, cts.Token))
-                {
-                    if (string.IsNullOrEmpty(chunk)) continue;
-                    reply += chunk;
-                    ChatWindow.AppendAssistantDelta(chunk);
-                }
-
-                ChatWindow.EndAssistantStream();
-
-                if (!string.IsNullOrEmpty(reply))
-                {
-                    try { OnAssistantReply("Nunu", reply, CancellationToken.None); }
-                    catch { if (Memory.Enabled) Memory.Append("assistant", reply, topic: "chat"); }
-
-                    try { Voice?.Speak(reply); } catch { }
-
-                    if (_broadcaster?.Enabled == true)
-                        _broadcaster.Enqueue(_echoChannel, reply);
-
-                    try
-                    {
-                        var path = TriggerSongcraft(reply, mood: null);
-                        if (!string.IsNullOrEmpty(path))
-                            ChatWindow.AppendAssistant($"[song] Saved: {path}");
-                    }
-                    catch { }
-                }
-            }
-            catch (Exception ex)
-            {
-                Log.Error(ex, "[model] stream failed");
-                ChatWindow.AppendSystem("[error] model stream failed; see logs.");
-                ChatWindow.EndAssistantStream();
-            }
-            finally
-            {
-                StopTypingIndicator(); // always stop the typing state
-                _isStreaming = false;
-                try { cts.Dispose(); } catch { }
-            }
-        }
-
-        // ===== Typing Indicator =====
-        private void StartTypingIndicator()
-        {
-            if (_typingActive) return;
-            _typingActive = true;
-
-            if (!Config.TypingIndicatorEnabled) return;
-            if (_broadcaster == null || !_broadcaster.Enabled) return;
-
-            var note = string.IsNullOrWhiteSpace(Config.TypingIndicatorMessage)
-                ? "Little Nunu is writing ...."
-                : Config.TypingIndicatorMessage;
-
-            _broadcaster.Enqueue(_echoChannel, note);
-        }
-
-        private void StopTypingIndicator()
-        {
-            if (!_typingActive) return;
-            _typingActive = false;
-
-            if (!Config.TypingIndicatorEnabled) return;
-            if (!Config.TypingIndicatorSendDone) return;
-            if (_broadcaster == null || !_broadcaster.Enabled) return;
-
-            var done = string.IsNullOrWhiteSpace(Config.TypingIndicatorDoneMessage)
-                ? "…done."
-                : Config.TypingIndicatorDoneMessage;
-
-            _broadcaster.Enqueue(_echoChannel, done);
         }
 
         // ===== Soul Threads =====
@@ -380,7 +295,6 @@ namespace NunuTheAICompanion
             }
         }
 
-        // ===== Bard-Call (/song …) =====
         public bool TryHandleBardCall(string author, string text)
         {
             if (!Config.SongcraftEnabled || _songcraft is null) return false;
@@ -401,7 +315,10 @@ namespace NunuTheAICompanion
                     mood = parts[0];
                     lyric = parts.Length > 1 ? parts[1] : "";
                 }
-                else lyric = after;
+                else
+                {
+                    lyric = after;
+                }
             }
 
             string payload = string.IsNullOrWhiteSpace(lyric) ? "(no text)" : lyric;
@@ -430,11 +347,208 @@ namespace NunuTheAICompanion
             return true;
         }
 
+        // ===== Emotion Engine wiring =====
+        private void InitializeEmotionEngine()
+        {
+            if (!Config.EmotionEnabled) return;
+
+            _emotions.SetLocked(Config.EmotionLock);
+            if (EmotionManager.TryParse(Config.EmotionDefault, out var start))
+                _emotions.Set(start);
+
+            _emotions.OnEmotionChanged += emo =>
+            {
+                _lastEmotionChangeUtc = DateTime.UtcNow;
+
+                // UI tint
+                ChatWindow.SetMoodColor(ColorFor(emo));
+
+                // Voice tone
+                try { Voice?.ApplyEmotionPreset(emo); } catch { }
+
+                // Emote line (optional)
+                if (Config.EmotionEmitEmote && _broadcaster?.Enabled == true)
+                {
+                    var line = _emotions.EmoteFor(emo);
+                    _broadcaster.Enqueue(_echoChannel, line);
+                }
+            };
+
+            // apply initial tint/voice
+            ChatWindow.SetMoodColor(ColorFor(_emotions.Current));
+            try { Voice?.ApplyEmotionPreset(_emotions.Current); } catch { }
+        }
+
+        private static Vector4 ColorFor(NunuEmotion emo)
+        {
+            // soft UI tints
+            switch (emo)
+            {
+                case NunuEmotion.Happy: return new Vector4(0.98f, 0.90f, 0.65f, 1f);
+                case NunuEmotion.Curious: return new Vector4(0.80f, 0.90f, 1.00f, 1f);
+                case NunuEmotion.Playful: return new Vector4(1.00f, 0.80f, 0.95f, 1f);
+                case NunuEmotion.Mournful: return new Vector4(0.70f, 0.78f, 1.00f, 1f);
+                case NunuEmotion.Sad: return new Vector4(0.75f, 0.80f, 0.95f, 1f);
+                case NunuEmotion.Angry: return new Vector4(1.00f, 0.75f, 0.75f, 1f);
+                case NunuEmotion.Tired: return new Vector4(0.85f, 0.85f, 0.85f, 1f);
+                default: return new Vector4(1f, 1f, 1f, 1f);
+            }
+        }
+
+        private void SafeSetEmotion(NunuEmotion emo, string reason)
+        {
+            if (!Config.EmotionEnabled) return;
+            try { _emotions.Set(emo); Log.Debug($"[Emotion] -> {emo} ({reason})"); } catch { }
+        }
+
+        // ===== Inbound path =====
+        private void OnHeardFromChat(string author, string text)
+        {
+            if (TryHandleBardCall(author, text))
+                return;
+
+            HandleUserSend(text);
+        }
+
+        private void HandleUserSend(string text)
+        {
+            try
+            {
+                var who = string.IsNullOrWhiteSpace(Config.ChatDisplayName) ? "You" : Config.ChatDisplayName;
+                OnUserUtterance(who, text, CancellationToken.None);
+            }
+            catch { /* best-effort */ }
+
+            // Typing indicator
+            StartTypingIndicator();
+
+            // Begin UI streaming
+            ChatWindow.BeginAssistantStream();
+
+            // Build context (thread + recents) then add the current turn
+            var request = BuildContext(text, CancellationToken.None);
+            request.Add(("user", text));
+
+            _ = StreamAssistantAsync(request);
+        }
+
+        // ===== Streaming model loop =====
+        private async Task StreamAssistantAsync(List<(string role, string content)> history)
+        {
+            if (_isStreaming) return;
+            _isStreaming = true;
+
+            var cts = new CancellationTokenSource();
+            string reply = "";
+            try
+            {
+                var chat = new List<(string role, string content)>(history);
+
+                // Emotion context + marker guidance
+                if (Config.EmotionEnabled)
+                    chat.Insert(0, ("system", $"Current emotional tone: {_emotions.Current}. If your tone changes, include a short inline marker like (emotion: happy)."));
+
+                if (!string.IsNullOrWhiteSpace(Config.SystemPrompt))
+                    chat.Insert(0, ("system", Config.SystemPrompt));
+
+                var client = new OllamaClient(_http, Config);
+
+                await foreach (var raw in client.StreamChatAsync(Config.BackendUrl, chat, cts.Token))
+                {
+                    var chunk = raw ?? "";
+
+                    // detect and consume emotion markers
+                    if (Config.EmotionEnabled && Config.EmotionPromptMarkersEnabled)
+                    {
+                        var m = EmotionMarker.Match(chunk);
+                        if (m.Success)
+                        {
+                            var name = m.Groups[1].Value;
+                            if (EmotionManager.TryParse(name, out var emo))
+                                SafeSetEmotion(emo, "marker");
+                            chunk = EmotionMarker.Replace(chunk, ""); // strip marker
+                        }
+                    }
+
+                    if (string.IsNullOrEmpty(chunk)) continue;
+
+                    reply += chunk;
+                    ChatWindow.AppendAssistantDelta(chunk); // stream deltas to UI
+                }
+
+                ChatWindow.EndAssistantStream();
+
+                if (!string.IsNullOrEmpty(reply))
+                {
+                    // Persist assistant line (threaded if available)
+                    try { OnAssistantReply("Nunu", reply, CancellationToken.None); }
+                    catch { if (Memory.Enabled) Memory.Append("assistant", reply, topic: "chat"); }
+
+                    // TTS
+                    try { Voice?.Speak(reply); } catch { }
+
+                    // Broadcast to chat
+                    if (_broadcaster?.Enabled == true)
+                        _broadcaster.Enqueue(_echoChannel, reply);
+
+                    // Optional: Songcraft composition (fire-and-forget)
+                    try
+                    {
+                        var path = TriggerSongcraft(reply, mood: null);
+                        if (!string.IsNullOrEmpty(path))
+                            ChatWindow.AppendAssistant($"[song] Saved: {path}");
+                    }
+                    catch { /* non-fatal */ }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "[model] stream failed");
+                ChatWindow.AppendSystem("[error] model stream failed; see logs.");
+                ChatWindow.EndAssistantStream();
+            }
+            finally
+            {
+                StopTypingIndicator(); // always stop
+                _isStreaming = false;
+                try { cts.Dispose(); } catch { }
+            }
+        }
+
+        // ===== Typing Indicator =====
+        private void StartTypingIndicator()
+        {
+            if (_typingActive) return;
+            _typingActive = true;
+
+            if (!Config.TypingIndicatorEnabled) return;
+            if (_broadcaster == null || !_broadcaster.Enabled) return;
+
+            var note = string.IsNullOrWhiteSpace(Config.TypingIndicatorMessage)
+                ? "Little Nunu is writing ...."
+                : Config.TypingIndicatorMessage;
+
+            _broadcaster.Enqueue(_echoChannel, note);
+        }
+
+        private void StopTypingIndicator()
+        {
+            if (!_typingActive) return;
+            _typingActive = false;
+
+            if (!Config.TypingIndicatorEnabled) return;
+            if (!Config.TypingIndicatorSendDone) return;
+            if (_broadcaster == null || !_broadcaster.Enabled) return;
+
+            var done = string.IsNullOrWhiteSpace(Config.TypingIndicatorDoneMessage)
+                ? "…done."
+                : Config.TypingIndicatorDoneMessage;
+
+            _broadcaster.Enqueue(_echoChannel, done);
+        }
+
         // ========================= Slash Command Router =========================
 
-        private static readonly StringComparer Ci = StringComparer.OrdinalIgnoreCase;
-
-        // NOTE: classic initialization to avoid indexer-initializer syntax issues
         private static readonly Dictionary<string, string> _aliases = CreateAliases();
 
         private static Dictionary<string, string> CreateAliases()
@@ -501,6 +615,14 @@ namespace NunuTheAICompanion
             d.Add("typing.done", nameof(Configuration.TypingIndicatorSendDone));
             d.Add("typing.done.msg", nameof(Configuration.TypingIndicatorDoneMessage));
 
+            // Emotion
+            d.Add("emotion.enabled", nameof(Configuration.EmotionEnabled));
+            d.Add("emotion.emote", nameof(Configuration.EmotionEmitEmote));
+            d.Add("emotion.markers", nameof(Configuration.EmotionPromptMarkersEnabled));
+            d.Add("emotion.decay", nameof(Configuration.EmotionDecaySeconds));
+            d.Add("emotion.default", nameof(Configuration.EmotionDefault));
+            d.Add("emotion.lock", nameof(Configuration.EmotionLock));
+
             // UI
             d.Add("startopen", nameof(Configuration.StartOpen));
             d.Add("opacity", nameof(Configuration.WindowOpacity));
@@ -539,6 +661,7 @@ namespace NunuTheAICompanion
             return d;
         }
 
+        // slash usage summary
         private static readonly string _help = string.Join("\n", new[]
         {
             "Usage:",
@@ -553,16 +676,21 @@ namespace NunuTheAICompanion
             "/nunu ipc unbind                        -> unbind IPC channel",
             "/nunu echo <say|party|shout|yell|fc|echo> -> set broadcast channel",
             "/nunu song [mood] <lyric...>            -> compose via Songcraft immediately",
-            "/nunu set typing true|false             -> enable/disable 'is writing' indicator",
-            "/nunu set typing.msg \"Little Nunu is writing ....\"",
-            "/nunu set typing.done true|false        -> send a done message when finished",
-            "/nunu set typing.done.msg \"…done.\"",
+            "/nunu emotion                           -> show current emotion",
+            "/nunu emotion set <neutral|happy|curious|playful|mournful|sad|angry|tired>",
+            "/nunu emotion lock <true|false>",
+            "/nunu emotion emote <true|false>",
         });
 
         private void HandleSlashCommand(string raw)
         {
             var args = (raw ?? string.Empty).Trim();
-            if (string.IsNullOrEmpty(args)) { ChatWindow.IsOpen = !ChatWindow.IsOpen; return; }
+            if (string.IsNullOrEmpty(args))
+            {
+                // default: toggle chat window
+                ChatWindow.IsOpen = !ChatWindow.IsOpen;
+                return;
+            }
 
             var parts = SplitArgs(args);
             if (parts.Count == 0) return;
@@ -572,7 +700,10 @@ namespace NunuTheAICompanion
             switch (head)
             {
                 case "help":
-                case "?": ChatWindow.AppendSystem(_help); return;
+                case "?":
+                    ChatWindow.AppendSystem(_help);
+                    return;
+
                 case "open": CmdOpen(parts); return;
                 case "get": CmdGet(parts); return;
                 case "set": CmdSet(parts); return;
@@ -582,13 +713,21 @@ namespace NunuTheAICompanion
                 case "ipc": CmdIpc(parts); return;
                 case "echo": CmdEcho(parts); return;
                 case "song": CmdSong(parts); return;
-                case "config": ConfigWindow.IsOpen = true; return;
-                case "memory": if (MemoryWindow is { } mw) mw.IsOpen = true; return;
-                default: ChatWindow.AppendSystem($"Unknown subcommand '{head}'. Type '/nunu help' for usage."); return;
+                case "emotion": CmdEmotion(parts); return;
+
+                case "config":
+                    ConfigWindow.IsOpen = true; return;
+
+                case "memory":
+                    if (MemoryWindow is { } mw) mw.IsOpen = true; return;
+
+                default:
+                    ChatWindow.AppendSystem($"Unknown subcommand '{head}'. Type '/nunu help' for usage.");
+                    return;
             }
         }
 
-        // --- subcommand implementations ---
+        // ===== Slash subcommand implementations =====
 
         private void CmdOpen(List<string> parts)
         {
@@ -763,6 +902,56 @@ namespace NunuTheAICompanion
                 ChatWindow.AddSystemLine("[Songcraft] Error while composing (see logs).");
                 try { _songLog?.Error(ex, "[Songcraft] /nunu song failed"); } catch { }
             }
+        }
+
+        private void CmdEmotion(List<string> parts)
+        {
+            if (parts.Count == 1)
+            {
+                ChatWindow.AppendSystem($"Emotion: {_emotions.Current} | locked={_emotions.Locked} | emote={(Config.EmotionEmitEmote ? "on" : "off")}");
+                return;
+            }
+
+            var sub = parts[1].ToLowerInvariant();
+            if (sub == "set")
+            {
+                if (parts.Count < 3) { ChatWindow.AppendSystem("emotion set <name>"); return; }
+                var name = parts[2];
+                if (EmotionManager.TryParse(name, out var emo))
+                {
+                    SafeSetEmotion(emo, "slash");
+                    ChatWindow.AppendSystem($"Emotion -> {emo}");
+                }
+                else ChatWindow.AppendSystem($"Unknown emotion '{name}'.");
+                return;
+            }
+
+            if (sub == "lock")
+            {
+                if (parts.Count < 3) { ChatWindow.AppendSystem("emotion lock <true|false>"); return; }
+                if (bool.TryParse(parts[2], out var b))
+                {
+                    _emotions.SetLocked(b);
+                    Config.EmotionLock = b; Config.Save();
+                    ChatWindow.AppendSystem($"Emotion lock = {b}");
+                }
+                else ChatWindow.AppendSystem("emotion lock expects true/false");
+                return;
+            }
+
+            if (sub == "emote")
+            {
+                if (parts.Count < 3) { ChatWindow.AppendSystem("emotion emote <true|false>"); return; }
+                if (bool.TryParse(parts[2], out var b))
+                {
+                    Config.EmotionEmitEmote = b; Config.Save();
+                    ChatWindow.AppendSystem($"Emotion emote = {b}");
+                }
+                else ChatWindow.AppendSystem("emotion emote expects true/false");
+                return;
+            }
+
+            ChatWindow.AppendSystem("emotion | emotion set <name> | emotion lock <true|false> | emotion emote <true|false>");
         }
 
         // --- utilities ---
