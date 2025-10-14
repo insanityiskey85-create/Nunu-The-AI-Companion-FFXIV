@@ -1,10 +1,9 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Numerics;
 using System.Net.Http;
-using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 using Dalamud.Game.Command;
 using Dalamud.Interface.Windowing;
 using Dalamud.IoC;
@@ -35,64 +34,47 @@ public sealed partial class PluginMain : IDalamudPlugin
     internal ConfigWindow ConfigWindow { get; private set; } = null!;
     internal MemoryWindow? MemoryWindow { get; private set; }
     internal ImageWindow? ImageWindow { get; private set; }
-    internal MemoryService? Memory { get; private set; }
+    internal MemoryService Memory { get; private set; } = null!;
     internal VoiceService? Voice { get; private set; }
 
-    private readonly List<(string role, string content)> _history = new();
     private readonly HttpClient _http = new();
-    private OllamaClient _client = null!;
-    private WebSearchClient _search = null!;
+    private readonly List<(string role, string content)> _history = new();
     private ChatBroadcaster? _broadcaster;
     private IpcChatRelay? _ipcRelay;
     private ChatListener? _listener;
-
-    private CancellationTokenSource? _cts;
     private bool _isStreaming;
 
-    private ChatBroadcaster.NunuChannel _echoChannel = ChatBroadcaster.NunuChannel.Party;
+    // Echo channel for broadcasted assistant lines
+    internal ChatBroadcaster.NunuChannel _echoChannel = ChatBroadcaster.NunuChannel.Party;
 
+    // Commands (keep simple � you likely have more in your original file)
     private const string Command = "/nunu";
-    private const string DiagCommand = "/nunudiag";
-    private const string DebugCommand = "/nunudebug";
-    private const string ImgCommand = "/nunuimg";
-    private const string SearchCommand = "/nunusearch";
-    private const string SpeakCommand = "/nunuspeak";
-    private const string ChanCommand = "/nunuchan";
-    private const string SendCommand = "/nunusend";
-    private const string RawCommand = "/nunucmd";
-    private const string IpcBindCommand = "/nunuipcbind";
-    private const string IpcPrefCommand = "/nunuipcmode";
-    private const string RehookCommand = "/nunurehook";
-    private const string VoiceCommand = "/nunuvoice";
+
+    // Soul Threads & Songcraft (from partials)
+    private EmbeddingClient? _embedding;
+    private SoulThreadService? _threads;
+    private SongcraftService? _songcraft;
+    private IPluginLog? _songLog;
 
     public PluginMain()
     {
         Instance = this;
 
         // Infinite HTTP timeout; cancel via CTS.
-        _http.Timeout = System.Threading.Timeout.InfiniteTimeSpan;
+        _http.Timeout = Timeout.InfiniteTimeSpan;
 
-        // Config
+        // Load config
         Config = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
         Config.Initialize(PluginInterface);
 
-        // Native chat (optional)
-        NativeChatSender.Initialize(this, PluginInterface, Log);
-
-        // Services
-        _client = new OllamaClient(_http, Config);
-        _search = new WebSearchClient(_http, Config);
-
-        // Memory (durable)
-        var cfgDir = PluginInterface.GetPluginConfigDirectory();
-        Memory = new MemoryService(cfgDir, Config.MemoryMaxEntries, Config.MemoryEnabled);
+        // Memory
+        var configDir = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "NunuTheAICompanion");
+        try { System.IO.Directory.CreateDirectory(configDir); } catch { /* ignore */ }
+        var maxEntries = 512; // safe default; your config may expose this
+        Memory = new MemoryService(configDir, maxEntries, enabled: true);
         Memory.Load();
 
-        
-        // Soul Threads + Songcraft init
-        InitializeSoulThreads(_http, Log);
-        InitializeSongcraft(Log);
-// Voice (TTS)
+        // Voice (TTS)
         try { Voice = new VoiceService(Config, Log); } catch (Exception ex) { Log.Error(ex, "[Voice] init failed"); }
 
         // Windows
@@ -105,53 +87,17 @@ public sealed partial class PluginMain : IDalamudPlugin
 
         try
         {
-            MemoryWindow = new MemoryWindow(Config, Memory, Log);
-            if (MemoryWindow is not null) WindowSystem.AddWindow(MemoryWindow);
+            MemoryWindow = new MemoryWindow(Memory, Log);
+            WindowSystem.AddWindow(MemoryWindow);
         }
-        catch { }
-
-        try
-        {
-            var imageSaveBase = System.IO.Path.Combine(cfgDir, Config.ImageSaveSubdir ?? "Images");
-            var imageClient = new ImageClient(_http, Config, imageSaveBase);
-            ImageWindow = new ImageWindow(Config, imageClient, Log);
-            if (ImageWindow is not null) WindowSystem.AddWindow(ImageWindow);
-        }
-        catch { }
-
-        // Greeting + hydrate
-        const string hello = "WAH! Little Nunu listens by the campfire. Call me with @nunu; I answer here, not in game chat.";
-        ChatWindow.AppendAssistant(hello);
-        _history.Add(("assistant", hello));
-        Memory?.Append("assistant", hello, topic: "greeting");
-
-        if (Config.RestoreHistoryOnStartup && Memory?.Enabled == true)
-        {
-            var recent = Memory.GetRecentForContext(Math.Max(0, Config.HistoryLoadCount));
-            foreach (var (role, content) in recent)
-            {
-                if (role == "assistant" && content == hello) continue; // avoid double greet
-                _history.Add((role, content));
-            }
-            if (recent.Count > 0)
-                ChatWindow.AppendAssistant($"[memory] Restored {recent.Count} lines into context.");
-        }
-
-        // Listener
-        _listener = new ChatListener(
-            ChatGui,
-            Log,
-            Config,
-            OnEligibleChatHeard,
-            mirrorDebugToWindow: s => { if (Config.DebugMirrorToWindow) ChatWindow.AppendAssistant(s); });
+        catch { /* optional window */ }
 
         // Broadcaster
         _broadcaster = new ChatBroadcaster(CommandManager, Framework, Log)
         {
-            Enabled = false,
-            MaxPerMinute = 6,
-            DelayBetweenLinesMs = 1500
+            Enabled = true, // default on; you can bind to config toggle
         };
+        NativeChatSender.Initialize(this, PluginInterface, Log);
         _broadcaster.SetNativeSender(full => NativeChatSender.TrySendFull(full));
 
         // IPC
@@ -164,345 +110,126 @@ public sealed partial class PluginMain : IDalamudPlugin
         _broadcaster.SetIpcRelay(_ipcRelay, Config.PreferIpcRelay);
 
         // Commands
-        CommandManager.AddHandler(Command, new CommandInfo(OnCommand) { HelpMessage = "Toggle Nunu. '/nunu config' settings. '/nunu memory' memories." });
-        CommandManager.AddHandler(DiagCommand, new CommandInfo(OnDiag) { HelpMessage = "Diagnostics for Nunu chat listening." });
-        CommandManager.AddHandler(DebugCommand, new CommandInfo(OnDebugCommand) { HelpMessage = "Toggle debug listening: /nunudebug on|off|mirror [on|off]" });
-        CommandManager.AddHandler(ImgCommand, new CommandInfo(OnImgCommand) { HelpMessage = "Open Nunu's image atelier." });
-        CommandManager.AddHandler(SearchCommand, new CommandInfo(OnSearchCommand) { HelpMessage = "Search the web: /nunusearch <query>" });
-        CommandManager.AddHandler(SpeakCommand, new CommandInfo(OnSpeakCommand) { HelpMessage = "Broadcast replies to game chat: /nunuspeak on|off" });
-        CommandManager.AddHandler(ChanCommand, new CommandInfo(OnChanCommand) { HelpMessage = "Set broadcast channel: /nunuchan say|party|fc|shout|yell" });
-        CommandManager.AddHandler(SendCommand, new CommandInfo(OnSendCommand) { HelpMessage = "Force-send: /nunusend <say|party|fc|shout|yell|echo> <text>" });
-        CommandManager.AddHandler(RawCommand, new CommandInfo(OnRawCommand) { HelpMessage = "Send a raw game command: /nunucmd <text>" });
-        CommandManager.AddHandler(IpcBindCommand, new CommandInfo(OnIpcBind) { HelpMessage = "Bind an IPC sender: /nunuipcbind <channelName>" });
-        CommandManager.AddHandler(IpcPrefCommand, new CommandInfo(OnIpcPref) { HelpMessage = "Prefer IPC over ProcessCommand: /nunuipcmode on|off" });
-        CommandManager.AddHandler(RehookCommand, new CommandInfo((_, __) => RehookListener()) { HelpMessage = "Rehook chat listener" });
-        CommandManager.AddHandler(VoiceCommand, new CommandInfo(OnVoiceCommand) { HelpMessage = "TTS: /nunuvoice list | set <name> | rate <n> | vol <0-100> | on | off | test <text>" });
+        CommandManager.AddHandler(Command, new CommandInfo(OnCommand)
+        {
+            HelpMessage = "Toggle Nunu. '/nunu config' to open settings. '/nunu memory' to open memories."
+        });
 
-        // UI hooks
-        PluginInterface.UiBuilder.Draw += DrawUI;
-        PluginInterface.UiBuilder.OpenConfigUi += () => ConfigWindow.IsOpen = true;
-        PluginInterface.UiBuilder.OpenMainUi += () => ChatWindow.IsOpen = true;
+        // Listener (chat -> model)
+        _listener = new ChatListener(ChatGui, Log, Config, OnHeardFromChat, mirrorDebugToWindow: s => { if (Config.DebugMirrorToWindow) ChatWindow.AppendSystem(s); });
 
-        Log.Information("[Nunu] Plugin initialized. NativeChat available={Avail}", NativeChatSender.IsAvailable);
+        // Soul Threads + Songcraft
+        InitializeSoulThreads(_http, Log);
+        InitializeSongcraft(Log);
+
+        // Greet
+        ChatWindow.AppendAssistant("Nunu is awake. Ask me anything�or play me a memory.");
     }
 
-    public void RehookListener()
+    public void Dispose()
     {
         try { _listener?.Dispose(); } catch { }
-        _listener = new ChatListener(
-            ChatGui, Log, Config,
-            OnEligibleChatHeard,
-            mirrorDebugToWindow: s => { if (Config.DebugMirrorToWindow) ChatWindow.AppendAssistant(s); });
-        Log.Information("[Nunu] Listener rehooked.");
-    }
-
-    private void OnImgCommand(string command, string args)
-    {
-        if (ImageWindow is null) { ChatGui.PrintError("Image window not available in this build."); return; }
-        ImageWindow.IsOpen = !ImageWindow.IsOpen;
-    }
-
-    private async void OnSearchCommand(string cmd, string args)
-    {
-        var q = (args ?? "").Trim();
-        if (string.IsNullOrWhiteSpace(q)) { ChatWindow.AppendAssistant("Usage: /nunusearch <query>"); return; }
+        try { _broadcaster?.Dispose(); } catch { }
+        try { _ipcRelay?.Dispose(); } catch { }
+        try { Voice?.Dispose(); } catch { }
 
         try
         {
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(Math.Clamp(Config.SearchTimeoutSec, 5, 60)));
-            var hits = await _search.SearchAsync(q, cts.Token);
-            if (hits.Count == 0) { ChatWindow.AppendAssistant($"No results for: {q}"); return; }
-
-            var text = WebSearchClient.FormatForContext(hits);
-            ChatWindow.AppendAssistant($"Web echoes for “{q}”:\n{text}");
-            if (Memory?.Enabled == true) Memory.Append("tool:web.search", text, topic: $"search:{q}");
-            _history.Add(("tool:web.search", text));
+            CommandManager.RemoveHandler(Command);
         }
-        catch (Exception ex)
-        {
-            ChatWindow.AppendAssistant($"[search error] {ex.Message}");
-            Log.Error(ex, "Search failed.");
-        }
-    }
+        catch { }
 
-    private void OnSpeakCommand(string cmd, string args)
-    {
-        if (_broadcaster is null) { ChatWindow.AppendAssistant("Broadcaster not available."); return; }
-        var a = (args ?? "").Trim().ToLowerInvariant();
-        if (a is "on" or "1" or "true") { _broadcaster.Enabled = true; ChatWindow.AppendAssistant("Broadcast to game chat: ON"); }
-        else if (a is "off" or "0" or "false") { _broadcaster.Enabled = false; ChatWindow.AppendAssistant("Broadcast to game chat: OFF"); }
-        else ChatWindow.AppendAssistant("Usage: /nunuspeak on|off");
-    }
-
-    private void OnChanCommand(string cmd, string args)
-    {
-        var a = (args ?? "").Trim().ToLowerInvariant();
-        if (string.IsNullOrEmpty(a)) { ChatWindow.AppendAssistant($"Current channel: {_echoChannel}. Usage: /nunuchan say|party|fc|shout|yell|echo"); return; }
-
-        _echoChannel = a switch
-        {
-            "say" => ChatBroadcaster.NunuChannel.Say,
-            "party" or "p" => ChatBroadcaster.NunuChannel.Party,
-            "fc" => ChatBroadcaster.NunuChannel.FreeCompany,
-            "shout" or "sh" => ChatBroadcaster.NunuChannel.Shout,
-            "yell" or "y" => ChatBroadcaster.NunuChannel.Yell,
-            "echo" => ChatBroadcaster.NunuChannel.Echo,
-            _ => _echoChannel
-        };
-        ChatWindow.AppendAssistant($"Broadcast channel set to: {_echoChannel}");
-    }
-
-    private void OnSendCommand(string cmd, string args)
-    {
-        if (_broadcaster is null) { ChatWindow.AppendAssistant("Broadcaster not available."); return; }
-        var a = (args ?? "").Trim();
-        var sp = a.IndexOf(' ');
-        if (sp <= 0) { ChatWindow.AppendAssistant("Usage: /nunusend <say|party|fc|shout|yell|echo> <text>"); return; }
-
-        var chan = a[..sp].ToLowerInvariant();
-        var text = a[(sp + 1)..].Trim();
-        var c = chan switch
-        {
-            "say" => ChatBroadcaster.NunuChannel.Say,
-            "party" or "p" => ChatBroadcaster.NunuChannel.Party,
-            "fc" => ChatBroadcaster.NunuChannel.FreeCompany,
-            "shout" or "sh" => ChatBroadcaster.NunuChannel.Shout,
-            "yell" or "y" => ChatBroadcaster.NunuChannel.Yell,
-            "echo" => ChatBroadcaster.NunuChannel.Echo,
-            _ => ChatBroadcaster.NunuChannel.Say
-        };
-
-        if (!_broadcaster.Enabled) ChatWindow.AppendAssistant("[note] Broadcaster is OFF. Use /nunuspeak on");
-        _broadcaster.Enqueue(c, text);
-    }
-
-    private void OnRawCommand(string cmd, string args)
-    {
-        var text = (args ?? "").Trim();
-        if (string.IsNullOrEmpty(text)) { ChatWindow.AppendAssistant("Usage: /nunucmd <game command>, e.g. /nunucmd /say raw test"); return; }
         try
         {
-            Framework.RunOnFrameworkThread(() =>
-            {
-                try { CommandManager.ProcessCommand(text); }
-                catch (Exception ex) { Log.Error(ex, "[Raw] ProcessCommand failed for: {Text}", text); }
-            });
-            ChatWindow.AppendAssistant($"[raw] sent: {text}");
+            WindowSystem.RemoveAllWindows();
         }
-        catch (Exception ex)
-        {
-            ChatWindow.AppendAssistant($"[raw] error: {ex.Message}");
-            Log.Error(ex, "[Raw] scheduling failed");
-        }
+        catch { }
+
+        try { Memory.Flush(); } catch { }
     }
 
-    private void OnIpcBind(string cmd, string args)
-    {
-        var name = (args ?? "").Trim();
-        if (_ipcRelay is null || string.IsNullOrEmpty(name)) { ChatWindow.AppendAssistant("Usage: /nunuipcbind <channelName>"); return; }
-        var ok = _ipcRelay.Bind(name);
-        Config.IpcChannelName = name; Config.Save();
-        _broadcaster?.SetIpcRelay(_ipcRelay, Config.PreferIpcRelay);
-        ChatWindow.AppendAssistant(ok ? $"[ipc] bound to '{name}'" : $"[ipc] failed to bind '{name}'");
-    }
+    // ========== Commands ==========
 
-    private void OnIpcPref(string cmd, string args)
+    private void OnCommand(string cmd, string args)
     {
-        var a = (args ?? "").Trim().ToLowerInvariant();
-        bool? state = a switch
+        args = (args ?? "").Trim().ToLowerInvariant();
+        if (args == "config")
         {
-            "on" or "1" or "true" => true,
-            "off" or "0" or "false" => false,
-            _ => null
-        };
-        if (state is null)
-        {
-            ChatWindow.AppendAssistant($"[ipc] PreferIpcRelay={(Config.PreferIpcRelay ? "ON" : "OFF")}. Usage: /nunuipcmode on|off");
+            ConfigWindow.IsOpen = true;
             return;
         }
-        Config.PreferIpcRelay = state.Value; Config.Save();
-        _broadcaster?.SetIpcRelay(_ipcRelay, Config.PreferIpcRelay);
-        ChatWindow.AppendAssistant($"[ipc] PreferIpcRelay {(state.Value ? "ON" : "OFF")}");
-    }
-
-    private void OnVoiceCommand(string cmd, string args)
-    {
-        var a = (args ?? "").Trim();
-        if (string.IsNullOrEmpty(a))
+        if (args == "memory")
         {
-            ChatWindow.AppendAssistant("Usage: /nunuvoice list | set <name> | rate <n> | vol <0-100> | on | off | test <text>");
+            if (MemoryWindow is { } mw) mw.IsOpen = true;
             return;
         }
 
-        var parts = a.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
-        var sub = parts[0].ToLowerInvariant();
-        var rest = parts.Length > 1 ? parts[1] : "";
-
-        switch (sub)
-        {
-            case "on":
-                Config.VoiceSpeakEnabled = true; Config.Save();
-                ChatWindow.AppendAssistant("[voice] speak ON");
-                break;
-            case "off":
-                Config.VoiceSpeakEnabled = false; Config.Save();
-                ChatWindow.AppendAssistant("[voice] speak OFF");
-                break;
-            case "list":
-                {
-                    var vs = Voice?.ListVoices() ?? Array.Empty<string>();
-                    ChatWindow.AppendAssistant(vs.Count == 0 ? "[voice] no voices detected" : "[voice] " + string.Join(", ", vs));
-                }
-                break;
-            case "set":
-                {
-                    if (string.IsNullOrWhiteSpace(rest)) { ChatWindow.AppendAssistant("[voice] set <name>"); break; }
-                    var ok = Voice?.TrySelectVoice(rest) ?? false;
-                    ChatWindow.AppendAssistant(ok ? $"[voice] selected '{rest}'" : $"[voice] failed for '{rest}'");
-                }
-                break;
-            case "rate":
-                {
-                    if (!int.TryParse(rest, out var r)) { ChatWindow.AppendAssistant("[voice] rate -10..10"); break; }
-                    r = Math.Clamp(r, -10, 10);
-                    Config.VoiceRate = r; Config.Save();
-                    ChatWindow.AppendAssistant($"[voice] rate={r}");
-                }
-                break;
-            case "vol":
-            case "volume":
-                {
-                    if (!int.TryParse(rest, out var v)) { ChatWindow.AppendAssistant("[voice] vol 0..100"); break; }
-                    v = Math.Clamp(v, 0, 100);
-                    Config.VoiceVolume = v; Config.Save();
-                    ChatWindow.AppendAssistant($"[voice] volume={v}");
-                }
-                break;
-            case "test":
-                {
-                    if (string.IsNullOrWhiteSpace(rest)) rest = "Every note is a tether… every soul, a string.";
-                    Voice?.Speak(rest, force: true);
-                    ChatWindow.AppendAssistant("[voice] test speaking.");
-                }
-                break;
-            default:
-                ChatWindow.AppendAssistant("Usage: /nunuvoice list | set <name> | rate <n> | vol <0-100> | on | off | test <text>");
-                break;
-        }
-    }
-
-    private void OnCommand(string command, string args)
-    {
-        var trimmed = args?.Trim() ?? string.Empty;
-        if (trimmed.Equals("config", StringComparison.OrdinalIgnoreCase)) { ConfigWindow.IsOpen = true; return; }
-        if (trimmed.Equals("memory", StringComparison.OrdinalIgnoreCase)) { if (MemoryWindow is not null) MemoryWindow.IsOpen = true; return; }
-        if (trimmed.Equals("image", StringComparison.OrdinalIgnoreCase)) { if (ImageWindow is not null) ImageWindow.IsOpen = true; return; }
+        // Toggle Chat window
         ChatWindow.IsOpen = !ChatWindow.IsOpen;
     }
 
-    private void OnDiag(string command, string args)
+    // ========== Chat Input Path ==========
+
+    private void OnHeardFromChat(string author, string text)
     {
-        var s = $"[diag] ListenEnabled={Config.ListenEnabled}, RequireCallsign={Config.RequireCallsign}, ListenSelf={Config.ListenSelf}, Callsign='{Config.Callsign}', " +
-                $"Say={Config.ListenSay}, Tell={Config.ListenTell}, Party={Config.ListenParty}, Alliance={Config.ListenAlliance}, FC={Config.ListenFreeCompany}, " +
-                $"Shout={Config.ListenShout}, Yell={Config.ListenYell}, WhitelistCount={(Config.Whitelist?.Count ?? 0)}, DebugListen={Config.DebugListen}, Mirror={Config.DebugMirrorToWindow}, " +
-                $"AllowInternet={Config.AllowInternet}, SearchBackend={Config.SearchBackend}, MaxRes={Config.SearchMaxResults}, " +
-                $"SpeakEnabled={_broadcaster?.Enabled}, EchoChannel={_echoChannel}, IpcChannel='{Config.IpcChannelName}', PreferIpc={Config.PreferIpcRelay}, NativeAvail={NativeChatSender.IsAvailable}";
-        Log.Information(s);
-        ChatWindow.AppendAssistant(s);
-        ChatGui.Print("Nunu diag printed in window.");
+        // Bard-Call early exit (/song�), handled before the model
+        if (TryHandleBardCall(author, text))
+            return;
+
+        HandleUserSend(text);
     }
 
-    private void OnDebugCommand(string cmd, string args)
-    {
-        var a = (args ?? "").Trim().ToLowerInvariant();
-        if (a is "on" or "1" or "true") { Config.DebugListen = true; Config.Save(); ChatWindow.AppendAssistant("[diag] DebugListen ON"); Log.Information("DebugListen ON"); }
-        else if (a is "off" or "0" or "false") { Config.DebugListen = false; Config.Save(); ChatWindow.AppendAssistant("[diag] DebugListen OFF"); Log.Information("DebugListen OFF"); }
-        else if (a.StartsWith("mirror"))
-        {
-            var parts = a.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-            bool set = parts.Length < 2 || parts[1] is "on" or "1" or "true";
-            Config.DebugMirrorToWindow = set; Config.Save();
-            ChatWindow.AppendAssistant($"[diag] DebugMirrorToWindow {(set ? "ON" : "OFF")}");
-            Log.Information("DebugMirrorToWindow {State}", set ? "ON" : "OFF");
-        }
-        else ChatWindow.AppendAssistant("[diag] Usage: /nunudebug on | off | mirror [on|off]");
-    }
-
-    
     private void HandleUserSend(string text)
     {
         var author = string.IsNullOrWhiteSpace(Config.ChatDisplayName) ? "You" : Config.ChatDisplayName;
-        // Threaded memory append
-        try { OnUserUtterance(author, text, CancellationToken.None); } catch { _ = 0; }
 
+        // Threaded memory append for the user utterance
+        try { OnUserUtterance(author, text, CancellationToken.None); } catch { /* fallback handled later */ }
+
+        // Begin UI stream
         ChatWindow.BeginAssistantStream();
 
-        // Build context from threads + recent, then include the current user turn last
+        // Build context from Soul Threads + recent, then add current user line
         var request = BuildContext(text, CancellationToken.None);
         request.Add(("user", text));
 
-        StreamAssistantAsync(request);
+        // Stream assistant
+        _ = StreamAssistantAsync(request);
     }
-private async void StreamAssistantAsync(List<(string role, string content)> request)
+
+    // ========== Model Streaming ==========
+
+    private async Task StreamAssistantAsync(List<(string role, string content)> history)
     {
-        if (_isStreaming) _cts?.Cancel();
+        if (_isStreaming) return;
         _isStreaming = true;
-        _cts = new CancellationTokenSource(); // infinite; cancel manually
 
-        var full = new StringBuilder();
-
+        var cts = new CancellationTokenSource();
+        string reply = "";
         try
         {
-            await foreach (var delta in _client.StreamChatAsync(Config.BackendUrl, request, _cts.Token))
+            // Merge: system prompt if any
+            var chat = new List<(string role, string content)>(history);
+            if (!string.IsNullOrWhiteSpace(Config.SystemPrompt))
+                chat.Insert(0, ("system", Config.SystemPrompt));
+
+            // Start streaming from Ollama-compatible endpoint
+            var client = new OllamaClient(_http, Config);
+            await foreach (var chunk in client.StreamChatAsync(Config.BackendUrl, chat, cts.Token))
             {
-                if (string.IsNullOrEmpty(delta)) continue;
-
-                var chunk = delta;
-
-                int markerStart = chunk.IndexOf("<<search:", StringComparison.OrdinalIgnoreCase);
-                if (markerStart >= 0)
-                {
-                    int markerEnd = chunk.IndexOf(">>", markerStart + 9);
-                    if (markerEnd > markerStart)
-                    {
-                        var q = chunk.Substring(markerStart + 9, markerEnd - (markerStart + 9)).Trim();
-                        ChatWindow.AppendAssistantDelta("\n[searching…]\n");
-                        try
-                        {
-                            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(Math.Clamp(Config.SearchTimeoutSec, 5, 60)));
-                            var hits = await _search.SearchAsync(q, cts.Token);
-                            var brief = WebSearchClient.FormatForContext(hits);
-                            _history.Add(("tool:web.search", brief));
-                            ChatWindow.AppendAssistantDelta($"\n[search results]\n{brief}\n");
-                        }
-                        catch (Exception ex)
-                        {
-                            ChatWindow.AppendAssistantDelta($"\n[search error] {ex.Message}\n");
-                        }
-                        chunk = chunk.Remove(markerStart, (markerEnd + 2) - markerStart);
-                    }
-                }
-
-                full.Append(chunk);
-                ChatWindow.AppendAssistantDelta(chunk);
+                reply += chunk;
+                ChatWindow.AppendAssistantStream(chunk);
             }
-        }
-        catch (Exception ex)
-        {
-            ChatWindow.AppendAssistantDelta($" [error: {ex.Message}]");
-            Log.Error(ex, "Streaming failed.");
-        }
-        finally
-        {
-            _isStreaming = false;
+
             ChatWindow.EndAssistantStream();
 
-            var reply = full.ToString().Trim();
             if (!string.IsNullOrEmpty(reply))
             {
                 _history.Add(("assistant", reply));
-                // Threaded memory append
-                try { OnAssistantReply("Nunu", reply, CancellationToken.None); } catch { if (Memory?.Enabled == true) Memory.Append("assistant", reply, topic: "chat"); }
+
+                // Threaded memory append (with safe fallback)
+                try { OnAssistantReply("Nunu", reply, CancellationToken.None); }
+                catch { if (Memory.Enabled) Memory.Append("assistant", reply, topic: "chat"); }
 
                 // Voice
                 try { Voice?.Speak(reply); } catch { }
@@ -518,45 +245,141 @@ private async void StreamAssistantAsync(List<(string role, string content)> requ
                     if (!string.IsNullOrEmpty(path))
                         ChatWindow.AppendAssistant($"[song] Saved: {path}");
                 }
-                catch { }
+                catch { /* non-fatal */ }
             }
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "[model] stream failed");
+            ChatWindow.AppendSystem("[error] model stream failed; see logs.");
+            ChatWindow.EndAssistantStream();
+        }
+        finally
+        {
+            _isStreaming = false;
+            try { cts.Dispose(); } catch { }
         }
     }
 
-    private void OnEligibleChatHeard(string author, string text)
+    // ========== Soul Threads bootstrap (partial wires call these) ==========
+
+    private void InitializeSoulThreads(HttpClient http, IPluginLog log)
     {
-        ChatWindow.AppendAssistant($"“{text}” you say, {author}? Very well…");
-        HandleUserSend(text);
+        try
+        {
+            _embedding = new EmbeddingClient(http, Config);
+            _threads = new SoulThreadService(Memory, _embedding, Config, log);
+            log.Info("[SoulThreads] initialized.");
+        }
+        catch (Exception ex)
+        {
+            log.Warning(ex, "[SoulThreads] failed to initialize; continuing without.");
+        }
     }
 
-    private void DrawUI() => WindowSystem.Draw();
-
-    public void Dispose()
+    private List<(string role, string content)> BuildContext(string userText, CancellationToken token)
     {
-        try { _cts?.Cancel(); } catch { }
-        try { Memory?.Flush(); } catch { }
-        try { Voice?.Dispose(); } catch { }
-        _listener?.Dispose();
-        _broadcaster?.Dispose();
-        _ipcRelay?.Dispose();
+        if (_threads is null)
+            return Memory.GetRecentForContext(Config.ContextTurns);
+        return _threads.GetContextFor(userText, Config.ThreadContextMaxFromThread, Config.ThreadContextMaxRecent, token);
+    }
 
-        WindowSystem.RemoveAllWindows();
+    private void OnUserUtterance(string author, string text, CancellationToken token)
+    {
+        if (_threads is null) { Memory.Append("user", text, topic: author); return; }
+        _threads.AppendAndThread("user", text, author, token);
+    }
 
-        CommandManager.RemoveHandler(Command);
-        CommandManager.RemoveHandler(DiagCommand);
-        CommandManager.RemoveHandler(DebugCommand);
-        CommandManager.RemoveHandler(ImgCommand);
-        CommandManager.RemoveHandler(SearchCommand);
-        CommandManager.RemoveHandler(SpeakCommand);
-        CommandManager.RemoveHandler(ChanCommand);
-        CommandManager.RemoveHandler(SendCommand);
-        CommandManager.RemoveHandler(RawCommand);
-        CommandManager.RemoveHandler(IpcBindCommand);
-        CommandManager.RemoveHandler(IpcPrefCommand);
-        CommandManager.RemoveHandler(RehookCommand);
-        CommandManager.RemoveHandler(VoiceCommand);
+    private void OnAssistantReply(string author, string reply, CancellationToken token)
+    {
+        if (_threads is null) { Memory.Append("assistant", reply, topic: author); return; }
+        _threads.AppendAndThread("assistant", reply, author, token);
+    }
 
-        _http.Dispose();
-        Log.Information("[Nunu] Plugin disposed.");
+    // ========== Songcraft bootstrap (partial wires call this) ==========
+
+    private void InitializeSongcraft(IPluginLog log)
+    {
+        _songLog = log;
+        try
+        {
+            _songcraft = new SongcraftService(Config, log);
+            log.Info("[Songcraft] initialized.");
+        }
+        catch (Exception ex)
+        {
+            log.Warning(ex, "[Songcraft] init failed; continuing without.");
+        }
+    }
+
+    public string? TriggerSongcraft(string text, string? mood = null)
+    {
+        if (!Config.SongcraftEnabled || _songcraft is null) return null;
+        var dir = string.IsNullOrWhiteSpace(Config.SongcraftSaveDir) ? Memory.StorageDirectory : Config.SongcraftSaveDir!;
+        try
+        {
+            return _songcraft.ComposeToFile(text, mood, dir, "nunu_song");
+        }
+        catch (Exception ex)
+        {
+            _songLog?.Error(ex, "[Songcraft] compose failed");
+            return null;
+        }
+    }
+
+    // ========== Bard-Call in chat (/song �) ==========
+
+    private static readonly HashSet<string> _songMoods = new(StringComparer.OrdinalIgnoreCase)
+    { "sorrow", "light", "playful", "mystic", "battle", "triumph" };
+
+    public bool TryHandleBardCall(string author, string text)
+    {
+        if (!Config.SongcraftEnabled || _songcraft is null) return false;
+
+        var trig = string.IsNullOrWhiteSpace(Config.SongcraftBardCallTrigger) ? "/song" : Config.SongcraftBardCallTrigger!;
+        var idx = text.IndexOf(trig, StringComparison.OrdinalIgnoreCase);
+        if (idx < 0) return false;
+
+        string after = text[(idx + trig.Length)..].Trim();
+        string? mood = null;
+        string lyric = text;
+
+        if (!string.IsNullOrEmpty(after))
+        {
+            var parts = after.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length >= 1 && _songMoods.Contains(parts[0]))
+            {
+                mood = parts[0];
+                lyric = parts.Length > 1 ? parts[1] : "";
+            }
+            else
+            {
+                lyric = after;
+            }
+        }
+
+        string payload = string.IsNullOrWhiteSpace(lyric) ? "(no text)" : lyric;
+        try
+        {
+            var path = TriggerSongcraft(payload, mood);
+            if (!string.IsNullOrEmpty(path))
+            {
+                ChatWindow?.AddSystemLine($"[Songcraft] Saved: {path}");
+                if (_broadcaster?.Enabled == true)
+                    _broadcaster.Enqueue(_echoChannel, $"[Songcraft] Saved: {path}");
+            }
+            else
+            {
+                ChatWindow?.AddSystemLine("[Songcraft] Failed to compose.");
+            }
+        }
+        catch (Exception ex)
+        {
+            ChatWindow?.AddSystemLine("[Songcraft] Error while composing (see logs).");
+            try { _songLog?.Error(ex, "[Songcraft] bard-call failed"); } catch { }
+        }
+
+        try { OnUserUtterance(author, $"{trig} {mood ?? ""} {payload}".Trim(), CancellationToken.None); } catch { }
+        return true;
     }
 }

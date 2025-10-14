@@ -17,6 +17,11 @@ public sealed class MemoryWindow : Window
     private string _exportPathShown = string.Empty;
     private Vector2 _tableSize = new(0, 360);
 
+    public MemoryWindow(MemoryService memory, IPluginLog log)
+    {
+        _log = log;
+    }
+
     public MemoryWindow(Configuration cfg, MemoryService? mem, IPluginLog log)
         : base("Nunu – Memories", ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse)
     {
