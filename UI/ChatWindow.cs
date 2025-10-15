@@ -11,28 +11,23 @@ namespace NunuTheAICompanion.UI
     {
         private readonly Configuration _cfg;
 
-        // --- model for lines ---
         private enum LineKind { User, Assistant, System }
+        private readonly List<(LineKind kind, string text)> _left = new();
+        private readonly List<(LineKind kind, string text)> _right = new();
+        private readonly List<string> _system = new();
 
-        private readonly List<(LineKind kind, string text)> _left = new();   // user pane
-        private readonly List<(LineKind kind, string text)> _right = new();  // assistant pane
-        private readonly List<string> _system = new();                       // banner/system log
-
-        // --- composer/input state ---
         private string _input = string.Empty;
         private bool _focusInputNext = false;
 
-        // --- streaming state ---
         private bool _isStreaming = false;
         private readonly StringBuilder _streamBuf = new();
         private readonly float _panePad = 8f;
 
-        // --- scroll state ---
         private bool _scrollLeftToEnd = false;
         private bool _scrollRightToEnd = false;
 
-        // --- colors (luminous magenta theme) ---
-        private readonly Vector4 _magenta = new(1.00f, 0.20f, 0.90f, 1.00f); // accent
+        // Luminous magenta palette
+        private readonly Vector4 _magenta = new(1.00f, 0.20f, 0.90f, 1.00f);
         private readonly Vector4 _magentaDim = new(0.90f, 0.35f, 0.85f, 1.00f);
         private readonly Vector4 _assistantText = new(0.96f, 0.88f, 0.98f, 1.00f);
         private readonly Vector4 _userText = new(0.95f, 0.95f, 0.95f, 1.00f);
@@ -44,8 +39,7 @@ namespace NunuTheAICompanion.UI
             : base("Little Nunu — Soul-Weeper Chat", ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoCollapse)
         {
             _cfg = cfg;
-
-            this.SizeConstraints = new WindowSizeConstraints
+            SizeConstraints = new WindowSizeConstraints
             {
                 MinimumSize = new Vector2(680, 460),
                 MaximumSize = new Vector2(9999, 9999)
@@ -54,18 +48,17 @@ namespace NunuTheAICompanion.UI
 
         public override bool DrawConditions()
         {
-            // apply global look each frame
+            if (PluginMain.IsShuttingDown) return false; // <<< gate
+
             ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 12f);
             ImGui.PushStyleVar(ImGuiStyleVar.FrameRounding, 10f);
 
-            // font scale & opacity
             if (_cfg.FontScale > 0f)
                 ImGui.SetWindowFontScale(_cfg.FontScale);
 
             if (_cfg.WindowOpacity > 0f && _cfg.WindowOpacity < 1f)
                 ImGui.PushStyleVar(ImGuiStyleVar.Alpha, _cfg.WindowOpacity);
 
-            // lock window
             if (_cfg.LockWindow)
                 Flags |= ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoResize;
             else
@@ -76,30 +69,20 @@ namespace NunuTheAICompanion.UI
 
         public override void PostDraw()
         {
-            // pop style vars pushed in DrawConditions
-            // order matters (LIFO):
-            if (_cfg.WindowOpacity > 0f && _cfg.WindowOpacity < 1f) ImGui.PopStyleVar(); // Alpha
-            ImGui.PopStyleVar(); // FrameRounding
-            ImGui.PopStyleVar(); // WindowRounding
+            if (_cfg.WindowOpacity > 0f && _cfg.WindowOpacity < 1f) ImGui.PopStyleVar();
+            ImGui.PopStyleVar();
+            ImGui.PopStyleVar();
         }
 
         public override void Draw()
         {
-            // header bar
+            if (PluginMain.IsShuttingDown) return; // extra guard
+
             DrawHeader();
-
-            // panes
-            if (_cfg.TwoPaneMode)
-                DrawTwoPane();
-            else
-                DrawSinglePane();
-
-            // composer
+            if (_cfg.TwoPaneMode) DrawTwoPane(); else DrawSinglePane();
             ImGui.Separator();
             DrawComposer();
         }
-
-        // ========================= Header =========================
 
         private void DrawHeader()
         {
@@ -110,32 +93,23 @@ namespace NunuTheAICompanion.UI
             if (_system.Count > 0)
             {
                 ImGui.PushStyleColor(ImGuiCol.Text, _systemText);
-                foreach (var s in _system)
-                {
-                    // subtle bullet
-                    ImGui.TextUnformatted($"› {s}");
-                }
+                foreach (var s in _system) ImGui.TextUnformatted($"› {s}");
                 ImGui.PopStyleColor();
             }
-
             ImGui.Dummy(new Vector2(0, 2));
         }
-
-        // ========================= Panes =========================
 
         private void DrawTwoPane()
         {
             var avail = ImGui.GetContentRegionAvail();
             var half = new Vector2(avail.X * 0.5f - _panePad * 0.5f, avail.Y - 120f);
 
-            // left: user
             ImGui.BeginGroup();
             DrawPaneBox("You", _userText, _left, ref _scrollLeftToEnd, half);
             ImGui.EndGroup();
 
             ImGui.SameLine(0, _panePad);
 
-            // right: nunu
             ImGui.BeginGroup();
             DrawPaneBox("Nunu", _assistantText, _right, ref _scrollRightToEnd, half, isRight: true);
             ImGui.EndGroup();
@@ -149,24 +123,14 @@ namespace NunuTheAICompanion.UI
             ImGui.PushStyleColor(ImGuiCol.ChildBg, _magentaDim with { W = 0.10f });
             ImGui.BeginChild("##nunu_single_pane", size, true);
 
-            // merge lines in order-ish: render system, then user/assistant interleaved by storage index
-            // simplest: display user then assistant chronologically in their own blocks
             ImGui.PushStyleColor(ImGuiCol.Text, _userText);
-            foreach (var (kind, text) in _left)
-            {
-                if (kind == LineKind.User)
-                    RenderBubble("You", text, left: true);
-            }
+            foreach (var (kind, text) in _left) if (kind == LineKind.User) RenderBubble("You", text, left: true);
             ImGui.PopStyleColor();
 
             ImGui.Separator();
 
             ImGui.PushStyleColor(ImGuiCol.Text, _assistantText);
-            foreach (var (kind, text) in _right)
-            {
-                if (kind == LineKind.Assistant)
-                    RenderBubble("Nunu", text, left: false);
-            }
+            foreach (var (kind, text) in _right) if (kind == LineKind.Assistant) RenderBubble("Nunu", text, left: false);
             ImGui.PopStyleColor();
 
             if (_isStreaming && _streamBuf.Length > 0)
@@ -186,7 +150,6 @@ namespace NunuTheAICompanion.UI
         private void DrawPaneBox(string title, Vector4 textColor, List<(LineKind, string)> lines,
             ref bool scrollEnd, Vector2 size, bool isRight = false)
         {
-            // title
             ImGui.PushStyleColor(ImGuiCol.Text, _magenta);
             ImGui.TextUnformatted(title);
             ImGui.PopStyleColor();
@@ -214,7 +177,6 @@ namespace NunuTheAICompanion.UI
                 }
             }
 
-            // streaming ghost on assistant pane
             if (isRight && _isStreaming && _streamBuf.Length > 0)
                 RenderBubble("Nunu (writing…)", _streamBuf.ToString(), left: false, streaming: true);
 
@@ -224,18 +186,15 @@ namespace NunuTheAICompanion.UI
                 scrollEnd = false;
             }
 
-            ImGui.PopStyleColor(); // text
+            ImGui.PopStyleColor();
             ImGui.EndChild();
-            ImGui.PopStyleColor(); // child bg
+            ImGui.PopStyleColor();
         }
-
-        // ========================= Composer =========================
 
         private void DrawComposer()
         {
             var availX = ImGui.GetContentRegionAvail().X;
 
-            // input
             if (_focusInputNext)
             {
                 ImGui.SetKeyboardFocusHere();
@@ -250,25 +209,20 @@ namespace NunuTheAICompanion.UI
 
             ImGui.SameLine();
 
-            // send button
             ImGui.PushStyleColor(ImGuiCol.Button, _magenta with { W = 0.45f });
             ImGui.PushStyleColor(ImGuiCol.ButtonHovered, _magenta with { W = 0.65f });
             ImGui.PushStyleColor(ImGuiCol.ButtonActive, _magenta with { W = 0.85f });
             if (ImGui.Button("Send", new Vector2(120f, height)))
-            {
                 SubmitInput();
-            }
             ImGui.PopStyleColor(3);
 
-            // submit on Ctrl+Enter
-            if (ImGui.IsItemFocused() || ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows))
+            if (ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows))
             {
                 bool ctrl = ImGui.GetIO().KeyCtrl;
-                if (ctrl && ImGui.IsKeyPressed((ImGuiKey)(int)ImGuiKey.Enter, false))
+                if (ctrl && ImGui.IsKeyPressed(ImGuiKey.Enter))
                     SubmitInput();
             }
 
-            // quick copy buttons (optional)
             if (_cfg.ShowCopyButtons)
             {
                 ImGui.Dummy(new Vector2(0, 4));
@@ -298,21 +252,16 @@ namespace NunuTheAICompanion.UI
             _focusInputNext = true;
         }
 
-        // ========================= Rendering helpers =========================
-
         private void RenderBubble(string speaker, string text, bool left, bool streaming = false)
         {
-            // name
             ImGui.PushStyleColor(ImGuiCol.Text, _magenta);
             ImGui.TextUnformatted(speaker);
             ImGui.PopStyleColor();
 
-            // body
             var wrap = ImGui.GetContentRegionAvail().X;
             ImGui.PushTextWrapPos(ImGui.GetCursorPosX() + MathF.Max(240f, wrap));
             var shown = _cfg.AsciiSafe ? AsciiSafe(text) : text;
 
-            // slightly different tint for streaming
             var bg = _magentaDim with { W = streaming ? 0.12f : 0.18f };
             ImGui.PushStyleColor(ImGuiCol.ChildBg, bg);
             ImGui.BeginChild($"##bubble_{speaker}_{ImGui.GetCursorPosY():0}", new Vector2(0, 0), true);
@@ -334,8 +283,7 @@ namespace NunuTheAICompanion.UI
         private static string AsciiSafe(string s)
         {
             var sb = new StringBuilder(s.Length);
-            foreach (var ch in s)
-                sb.Append(ch <= 127 ? ch : '?');
+            foreach (var ch in s) sb.Append(ch <= 127 ? ch : '?');
             return sb.ToString();
         }
 
@@ -348,38 +296,18 @@ namespace NunuTheAICompanion.UI
             return null;
         }
 
-        // ========================= Public API (called by PluginMain) =========================
-
+        // Public API
         public void AppendSystem(string text)
         {
             _system.Add(text);
-            // also mirror into both panes as faint system lines
             _left.Add((LineKind.System, text));
             _right.Add((LineKind.System, text));
             _scrollLeftToEnd = _scrollRightToEnd = true;
         }
-
         public void AddSystemLine(string text) => AppendSystem(text);
-
-        public void AppendAssistant(string text)
-        {
-            _right.Add((LineKind.Assistant, text));
-            _scrollRightToEnd = true;
-        }
-
-        public void BeginAssistantStream()
-        {
-            _isStreaming = true;
-            _streamBuf.Clear();
-        }
-
-        public void AppendAssistantDelta(string delta)
-        {
-            if (!_isStreaming) { BeginAssistantStream(); }
-            _streamBuf.Append(delta);
-            _scrollRightToEnd = true;
-        }
-
+        public void AppendAssistant(string text) { _right.Add((LineKind.Assistant, text)); _scrollRightToEnd = true; }
+        public void BeginAssistantStream() { _isStreaming = true; _streamBuf.Clear(); }
+        public void AppendAssistantDelta(string delta) { if (!_isStreaming) BeginAssistantStream(); _streamBuf.Append(delta); _scrollRightToEnd = true; }
         public void EndAssistantStream()
         {
             if (!_isStreaming) return;
@@ -392,20 +320,6 @@ namespace NunuTheAICompanion.UI
                 _scrollRightToEnd = true;
             }
         }
-
-        public void AddUserLine(string text)
-        {
-            var who = _cfg.ChatDisplayName?.Length > 0 ? _cfg.ChatDisplayName! : "You";
-            _left.Add((LineKind.User, text));
-            _scrollLeftToEnd = true;
-
-            // also show a typing indicator in system banner & right pane if streaming is about to start
-            // (PluginMain starts streaming immediately after calling HandleUserSend)
-        }
-
-        internal void SetMoodColor(Vector4 vector4)
-        {
-            throw new NotImplementedException();
-        }
+        public void AddUserLine(string text) { _left.Add((LineKind.User, text)); _scrollLeftToEnd = true; }
     }
 }

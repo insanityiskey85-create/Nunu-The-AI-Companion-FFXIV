@@ -1,4 +1,5 @@
-﻿using System.Numerics;
+﻿using System;
+using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
 
@@ -19,8 +20,16 @@ namespace NunuTheAICompanion.UI
             };
         }
 
+        public override bool DrawConditions()
+        {
+            if (PluginMain.IsShuttingDown) return false;
+            return base.DrawConditions();
+        }
+
         public override void Draw()
         {
+            if (PluginMain.IsShuttingDown) return;
+
             if (!ImGui.BeginTabBar("##nunu_cfg_tabs"))
                 return;
 
@@ -39,294 +48,358 @@ namespace NunuTheAICompanion.UI
             ImGui.EndTabBar();
         }
 
-        // ================= Core =================
+        // ===== Tabs =====
+
         private void DrawCore()
         {
-            ImGui.TextUnformatted("Backend");
+            ImGui.TextUnformatted("Model Backend");
             ImGui.Separator();
 
-            if (InputTextRef("Backend URL", _cfg.BackendUrl ?? string.Empty, out var backendNext))
-            { _cfg.BackendUrl = backendNext; _cfg.Save(); }
+            string backendUrl = _cfg.BackendUrl ?? string.Empty;
+            if (ImGui.InputText("Backend URL", ref backendUrl, 1024))
+            {
+                _cfg.BackendUrl = backendUrl;
+                _cfg.Save();
+            }
 
-            if (InputTextRef("Model Name", _cfg.ModelName ?? string.Empty, out var modelNext))
-            { _cfg.ModelName = modelNext; _cfg.Save(); }
+            string model = _cfg.ModelName ?? string.Empty;
+            if (ImGui.InputText("Model", ref model, 256))
+            {
+                _cfg.ModelName = model;
+                _cfg.Save();
+            }
 
             float temp = _cfg.Temperature;
-            if (ImGui.SliderFloat("Temperature", ref temp, 0f, 2f))
-            { _cfg.Temperature = temp; _cfg.Save(); }
+            if (ImGui.SliderFloat("Temperature", ref temp, 0f, 2.0f))
+            {
+                _cfg.Temperature = temp;
+                _cfg.Save();
+            }
 
-            if (InputTextMultilineRef("System Prompt", _cfg.SystemPrompt ?? string.Empty, 6, out var sysNext))
-            { _cfg.SystemPrompt = sysNext; _cfg.Save(); }
-
-            if (InputTextRef("Display Name", _cfg.ChatDisplayName ?? string.Empty, out var dnNext))
-            { _cfg.ChatDisplayName = dnNext; _cfg.Save(); }
+            string sys = _cfg.SystemPrompt ?? string.Empty;
+            if (ImGui.InputTextMultiline("System Prompt", ref sys, 4000, new Vector2(-1, 140)))
+            {
+                _cfg.SystemPrompt = sys;
+                _cfg.Save();
+            }
         }
 
-        // ============ Memory / Threads ============
         private void DrawMemory()
         {
             ImGui.TextUnformatted("Context & Soul Threads");
             ImGui.Separator();
 
-            IntSlider("Recent Context Turns", _cfg.ContextTurns, 0, 64, v => _cfg.ContextTurns = v);
-            BoolCheckbox("Enable Soul Threads", _cfg.SoulThreadsEnabled, v => _cfg.SoulThreadsEnabled = v);
+            int turns = _cfg.ContextTurns;
+            if (ImGui.SliderInt("Context Turns", ref turns, 2, 64))
+            {
+                _cfg.ContextTurns = turns;
+                _cfg.Save();
+            }
 
-            if (InputTextRef("Embedding Model", _cfg.EmbeddingModel ?? string.Empty, out var embedNext))
-            { _cfg.EmbeddingModel = embedNext; _cfg.Save(); }
+            bool threads = _cfg.SoulThreadsEnabled;
+            if (ImGui.Checkbox("Enable Soul Threads", ref threads))
+            {
+                _cfg.SoulThreadsEnabled = threads;
+                _cfg.Save();
+            }
 
-            FloatSlider("Thread Similarity Threshold", _cfg.ThreadSimilarityThreshold, 0.0f, 1.0f, v => _cfg.ThreadSimilarityThreshold = v);
-            IntSlider("Max Lines From Thread", _cfg.ThreadContextMaxFromThread, 0, 64, v => _cfg.ThreadContextMaxFromThread = v);
-            IntSlider("Max Recent Lines", _cfg.ThreadContextMaxRecent, 0, 64, v => _cfg.ThreadContextMaxRecent = v);
+            string embed = _cfg.EmbeddingModel ?? string.Empty;
+            if (ImGui.InputText("Embedding Model", ref embed, 256))
+            {
+                _cfg.EmbeddingModel = embed;
+                _cfg.Save();
+            }
+
+            float thr = _cfg.ThreadSimilarityThreshold;
+            if (ImGui.SliderFloat("Thread Similarity Threshold", ref thr, 0f, 1f))
+            {
+                _cfg.ThreadSimilarityThreshold = thr;
+                _cfg.Save();
+            }
+
+            int fromThread = _cfg.ThreadContextMaxFromThread;
+            if (ImGui.SliderInt("Max from Thread", ref fromThread, 0, 32))
+            {
+                _cfg.ThreadContextMaxFromThread = fromThread;
+                _cfg.Save();
+            }
+
+            int maxRecent = _cfg.ThreadContextMaxRecent;
+            if (ImGui.SliderInt("Max Recent", ref maxRecent, 0, 32))
+            {
+                _cfg.ThreadContextMaxRecent = maxRecent;
+                _cfg.Save();
+            }
         }
 
-        // ================= Songcraft =================
         private void DrawSongcraft()
         {
             ImGui.TextUnformatted("Songcraft");
             ImGui.Separator();
 
-            BoolCheckbox("Enable Songcraft", _cfg.SongcraftEnabled, v => _cfg.SongcraftEnabled = v);
-
-            if (InputTextRef("Bard-Call Trigger", _cfg.SongcraftBardCallTrigger ?? "/song", out var trigNext))
-            { _cfg.SongcraftBardCallTrigger = trigNext; _cfg.Save(); }
-
-            if (InputTextRef("Save Directory", _cfg.SongcraftSaveDir ?? string.Empty, out var dirNext))
-            { _cfg.SongcraftSaveDir = dirNext; _cfg.Save(); }
-
-            // Search: numeric sliders must use ints (no ?? "string")
-            int maxResults = _cfg.SearchMaxResults;
-            if (ImGui.SliderInt("Max Results", ref maxResults, 1, 20))
+            bool enabled = _cfg.SongcraftEnabled;
+            if (ImGui.Checkbox("Enable Songcraft", ref enabled))
             {
-                _cfg.SearchMaxResults = maxResults;
+                _cfg.SongcraftEnabled = enabled;
                 _cfg.Save();
             }
 
-            int timeout = _cfg.SearchTimeoutSec;
-            if (ImGui.SliderInt("Timeout (sec)", ref timeout, 5, 120))
+            string trig = _cfg.SongcraftBardCallTrigger ?? "/song";
+            if (ImGui.InputText("Bard-Call Trigger", ref trig, 64))
             {
-                _cfg.SearchTimeoutSec = timeout;
+                _cfg.SongcraftBardCallTrigger = trig;
+                _cfg.Save();
+            }
+
+            int bars = _cfg.SongcraftBars;
+            if (ImGui.SliderInt("Bars", ref bars, 4, 128))
+            {
+                _cfg.SongcraftBars = bars;
+                _cfg.Save();
+            }
+
+            int tempo = _cfg.SongcraftTempoBpm;
+            if (ImGui.SliderInt("Tempo BPM", ref tempo, 40, 220))
+            {
+                _cfg.SongcraftTempoBpm = tempo;
+                _cfg.Save();
+            }
+
+            int program = _cfg.SongcraftProgram;
+            if (ImGui.SliderInt("MIDI Program", ref program, 0, 127))
+            {
+                _cfg.SongcraftProgram = program;
+                _cfg.Save();
+            }
+
+            string dir = _cfg.SongcraftSaveDir ?? string.Empty;
+            if (ImGui.InputText("Save Directory", ref dir, 512))
+            {
+                _cfg.SongcraftSaveDir = dir;
                 _cfg.Save();
             }
         }
 
-
-        // ================= Voice =================
         private void DrawVoice()
         {
             ImGui.TextUnformatted("Voice (TTS)");
             ImGui.Separator();
 
-            BoolCheckbox("Speak replies", _cfg.VoiceSpeakEnabled, v => _cfg.VoiceSpeakEnabled = v);
+            bool on = _cfg.VoiceSpeakEnabled;
+            if (ImGui.Checkbox("Enable Voice", ref on))
+            {
+                _cfg.VoiceSpeakEnabled = on;
+                _cfg.Save();
+            }
 
-            if (InputTextRef("Voice Name", _cfg.VoiceName ?? string.Empty, out var voiceNext))
-            { _cfg.VoiceName = voiceNext; _cfg.Save(); }
+            string vname = _cfg.VoiceName ?? string.Empty;
+            if (ImGui.InputText("Voice Name", ref vname, 128))
+            {
+                _cfg.VoiceName = vname;
+                _cfg.Save();
+            }
 
-            FloatSlider("Rate", _cfg.VoiceRate, 0.25f, 2.0f, v => _cfg.VoiceRate = (int)v);
-            FloatSlider("Volume", _cfg.VoiceVolume, 0.0f, 1.0f, v => _cfg.VoiceVolume = (int)v);
+            float rate = _cfg.VoiceRate;
+            if (ImGui.SliderFloat("Rate", ref rate, 0.25f, 2.0f))
+            {
+                _cfg.VoiceRate = (int)rate;
+                _cfg.Save();
+            }
 
-            BoolCheckbox("Only when chat window focused", _cfg.VoiceOnlyWhenWindowFocused, v => _cfg.VoiceOnlyWhenWindowFocused = v);
+            float vol = _cfg.VoiceVolume;
+            if (ImGui.SliderFloat("Volume", ref vol, 0f, 1f))
+            {
+                _cfg.VoiceVolume = (int)vol;
+                _cfg.Save();
+            }
+
+            bool focus = _cfg.VoiceOnlyWhenWindowFocused;
+            if (ImGui.Checkbox("Only Speak When Window Focused", ref focus))
+            {
+                _cfg.VoiceOnlyWhenWindowFocused = focus;
+                _cfg.Save();
+            }
         }
 
-        // ================= Listen =================
         private void DrawListen()
         {
-            ImGui.TextUnformatted("Listening");
+            ImGui.TextUnformatted("Listen (inbound chat filter)");
             ImGui.Separator();
 
-            BoolCheckbox("Enable inbound listening", _cfg.ListenEnabled, v => _cfg.ListenEnabled = v);
+            void Bool(string label, ref bool v, Action<bool> set)
+            {
+                if (ImGui.Checkbox(label, ref v)) { set(v); _cfg.Save(); }
+            }
 
-            if (InputTextRef("Callsign (e.g. nunu:)", _cfg.Callsign ?? string.Empty, out var csNext))
-            { _cfg.Callsign = csNext; _cfg.Save(); }
+            bool listen = _cfg.ListenEnabled; Bool("Enabled", ref listen, v => _cfg.ListenEnabled = v);
+            bool self = _cfg.ListenSelf; Bool("Self", ref self, v => _cfg.ListenSelf = v);
+            bool say = _cfg.ListenSay; Bool("Say", ref say, v => _cfg.ListenSay = v);
+            bool tell = _cfg.ListenTell; Bool("Tell", ref tell, v => _cfg.ListenTell = v);
+            bool party = _cfg.ListenParty; Bool("Party", ref party, v => _cfg.ListenParty = v);
+            bool alliance = _cfg.ListenAlliance; Bool("Alliance", ref alliance, v => _cfg.ListenAlliance = v);
+            bool fc = _cfg.ListenFreeCompany; Bool("Free Company", ref fc, v => _cfg.ListenFreeCompany = v);
+            bool shout = _cfg.ListenShout; Bool("Shout", ref shout, v => _cfg.ListenShout = v);
+            bool yell = _cfg.ListenYell; Bool("Yell", ref yell, v => _cfg.ListenYell = v);
 
-            BoolCheckbox("Require callsign", _cfg.RequireCallsign, v => _cfg.RequireCallsign = v);
+            string callsign = _cfg.Callsign ?? string.Empty;
+            if (ImGui.InputText("Callsign (optional)", ref callsign, 64)) { _cfg.Callsign = callsign; _cfg.Save(); }
 
-            ImGui.Separator();
-
-            BoolCheckbox("Self", _cfg.ListenSelf, v => _cfg.ListenSelf = v);
-            BoolCheckbox("Say", _cfg.ListenSay, v => _cfg.ListenSay = v);
-            BoolCheckbox("Tell", _cfg.ListenTell, v => _cfg.ListenTell = v);
-            BoolCheckbox("Party", _cfg.ListenParty, v => _cfg.ListenParty = v);
-            BoolCheckbox("Alliance", _cfg.ListenAlliance, v => _cfg.ListenAlliance = v);
-            BoolCheckbox("Free Company", _cfg.ListenFreeCompany, v => _cfg.ListenFreeCompany = v);
-            BoolCheckbox("Shout", _cfg.ListenShout, v => _cfg.ListenShout = v);
-            BoolCheckbox("Yell", _cfg.ListenYell, v => _cfg.ListenYell = v);
+            bool req = _cfg.RequireCallsign;
+            if (ImGui.Checkbox("Require Callsign", ref req)) { _cfg.RequireCallsign = req; _cfg.Save(); }
         }
 
-        // ================= Broadcast / IPC =================
         private void DrawBroadcast()
         {
             ImGui.TextUnformatted("Broadcast & IPC");
             ImGui.Separator();
 
-            BoolCheckbox("Broadcast as Persona Name", _cfg.BroadcastAsPersona, v => _cfg.BroadcastAsPersona = v);
+            string echo = _cfg.EchoChannel ?? "party";
+            if (ImGui.InputText("Echo Channel (say/party/shout/yell/fc/echo)", ref echo, 32))
+            {
+                _cfg.EchoChannel = echo;
+                _cfg.Save();
+            }
 
-            if (InputTextRef("Persona Name", _cfg.PersonaName ?? "Nunu", out var pnameNext))
-            { _cfg.PersonaName = pnameNext; _cfg.Save(); }
+            bool persona = _cfg.BroadcastAsPersona;
+            if (ImGui.Checkbox("Broadcast as Persona", ref persona))
+            {
+                _cfg.BroadcastAsPersona = persona;
+                _cfg.Save();
+            }
 
-            if (InputTextRef("Echo Channel (say/party/shout/yell/fc/echo)", _cfg.EchoChannel ?? "party", out var echoNext))
-            { _cfg.EchoChannel = echoNext; _cfg.Save(); }
+            string pname = _cfg.PersonaName ?? string.Empty;
+            if (ImGui.InputText("Persona Name", ref pname, 128))
+            {
+                _cfg.PersonaName = pname;
+                _cfg.Save();
+            }
 
-            ImGui.Separator();
+            string ipc = _cfg.IpcChannelName ?? string.Empty;
+            if (ImGui.InputText("IPC Channel", ref ipc, 128))
+            {
+                _cfg.IpcChannelName = ipc;
+                _cfg.Save();
+            }
 
-            if (InputTextRef("IPC Channel", _cfg.IpcChannelName ?? string.Empty, out var ipcNext))
-            { _cfg.IpcChannelName = ipcNext; _cfg.Save(); }
-
-            BoolCheckbox("Prefer IPC relay over native send", _cfg.PreferIpcRelay, v => _cfg.PreferIpcRelay = v);
+            bool prefer = _cfg.PreferIpcRelay;
+            if (ImGui.Checkbox("Prefer IPC Relay", ref prefer))
+            {
+                _cfg.PreferIpcRelay = prefer;
+                _cfg.Save();
+            }
         }
 
-        // ================= Search =================
         private void DrawSearch()
         {
             ImGui.TextUnformatted("Search / Web");
             ImGui.Separator();
 
-            BoolCheckbox("Allow Internet", _cfg.AllowInternet, v => _cfg.AllowInternet = v);
+            bool allow = _cfg.AllowInternet;
+            if (ImGui.Checkbox("Allow Internet Access", ref allow)) { _cfg.AllowInternet = allow; _cfg.Save(); }
 
-            if (InputTextRef("Search Backend", _cfg.SearchBackend ?? string.Empty, out var backendNext))
-            { _cfg.SearchBackend = backendNext; _cfg.Save(); }
+            string backend = _cfg.SearchBackend ?? string.Empty;
+            if (ImGui.InputText("Search Backend", ref backend, 128)) { _cfg.SearchBackend = backend; _cfg.Save(); }
 
-            if (InputTextRef("Search API Key", _cfg.SearchApiKey ?? string.Empty, out var keyNext))
-            { _cfg.SearchApiKey = keyNext; _cfg.Save(); }
+            string key = _cfg.SearchApiKey ?? string.Empty;
+            if (ImGui.InputText("Search API Key", ref key, 256)) { _cfg.SearchApiKey = key; _cfg.Save(); }
 
-            int maxResults = _cfg.SearchMaxResults;
-            if (ImGui.SliderInt("Max Results", ref maxResults, 1, 20))
-            { _cfg.SearchMaxResults = maxResults; _cfg.Save(); }
+            int max = _cfg.SearchMaxResults;
+            if (ImGui.SliderInt("Max Results", ref max, 1, 20)) { _cfg.SearchMaxResults = max; _cfg.Save(); }
 
-            int timeout = _cfg.SearchTimeoutSec;
-            if (ImGui.SliderInt("Timeout (sec)", ref timeout, 5, 120))
-            { _cfg.SearchTimeoutSec = timeout; _cfg.Save(); }
+            int tsec = _cfg.SearchTimeoutSec;
+            if (ImGui.SliderInt("Timeout (sec)", ref tsec, 5, 120)) { _cfg.SearchTimeoutSec = tsec; _cfg.Save(); }
         }
 
-        // ================= Images =================
         private void DrawImages()
         {
             ImGui.TextUnformatted("Images");
             ImGui.Separator();
 
-            if (InputTextRef("Image Backend", _cfg.ImageBackend ?? string.Empty, out var ibNext))
-            { _cfg.ImageBackend = ibNext; _cfg.Save(); }
+            string ib = _cfg.ImageBackend ?? string.Empty;
+            if (ImGui.InputText("Backend", ref ib, 128)) { _cfg.ImageBackend = ib; _cfg.Save(); }
 
-            if (InputTextRef("Image Base URL", _cfg.ImageBaseUrl ?? string.Empty, out var urlNext))
-            { _cfg.ImageBaseUrl = urlNext; _cfg.Save(); }
+            string url = _cfg.ImageBaseUrl ?? string.Empty;
+            if (ImGui.InputText("Base URL", ref url, 512)) { _cfg.ImageBaseUrl = url; _cfg.Save(); }
 
-            if (InputTextRef("Image Model", _cfg.ImageModel ?? string.Empty, out var modelNext))
-            { _cfg.ImageModel = modelNext; _cfg.Save(); }
+            string mdl = _cfg.ImageModel ?? string.Empty;
+            if (ImGui.InputText("Model", ref mdl, 128)) { _cfg.ImageModel = mdl; _cfg.Save(); }
 
             int steps = _cfg.ImageSteps;
-            if (ImGui.SliderInt("Steps", ref steps, 1, 200))
-            { _cfg.ImageSteps = steps; _cfg.Save(); }
+            if (ImGui.SliderInt("Steps", ref steps, 1, 150)) { _cfg.ImageSteps = steps; _cfg.Save(); }
 
-            FloatSlider("CFG", _cfg.ImageGuidance, 0.0f, 30.0f, v => _cfg.ImageGuidance = v);
+            float guidance = _cfg.ImageGuidance;
+            if (ImGui.SliderFloat("CFG", ref guidance, 0f, 30f)) { _cfg.ImageGuidance = guidance; _cfg.Save(); }
 
             int w = _cfg.ImageWidth;
-            if (ImGui.SliderInt("Width", ref w, 64, 2048))
-            { _cfg.ImageWidth = w; _cfg.Save(); }
+            if (ImGui.SliderInt("Width", ref w, 64, 2048)) { _cfg.ImageWidth = w; _cfg.Save(); }
 
             int h = _cfg.ImageHeight;
-            if (ImGui.SliderInt("Height", ref h, 64, 2048))
-            { _cfg.ImageHeight = h; _cfg.Save(); }
+            if (ImGui.SliderInt("Height", ref h, 64, 2048)) { _cfg.ImageHeight = h; _cfg.Save(); }
 
-            if (InputTextRef("Sampler", _cfg.ImageSampler ?? string.Empty, out var samplerNext))
-            { _cfg.ImageSampler = samplerNext; _cfg.Save(); }
+            string sampler = _cfg.ImageSampler ?? string.Empty;
+            if (ImGui.InputText("Sampler", ref sampler, 64)) { _cfg.ImageSampler = sampler; _cfg.Save(); }
 
-            int seedLocal = _cfg.ImageSeed;
-            if (ImGui.InputInt("Seed", ref seedLocal))
-            { _cfg.ImageSeed = seedLocal; _cfg.Save(); }
+            // IMPORTANT: ImageSeed is an int -> use InputInt NOT InputText to avoid ref/flags errors.
+            int seed = _cfg.ImageSeed;
+            if (ImGui.InputInt("Seed", ref seed)) { _cfg.ImageSeed = seed; _cfg.Save(); }
 
             int itime = _cfg.ImageTimeoutSec;
-            if (ImGui.SliderInt("Timeout (sec)", ref itime, 5, 300))
-            { _cfg.ImageTimeoutSec = itime; _cfg.Save(); }
+            if (ImGui.SliderInt("Timeout (sec)", ref itime, 5, 180)) { _cfg.ImageTimeoutSec = itime; _cfg.Save(); }
 
-            BoolCheckbox("Save images to disk", _cfg.SaveImages, v => _cfg.SaveImages = v);
+            bool save = _cfg.SaveImages;
+            if (ImGui.Checkbox("Save Images", ref save)) { _cfg.SaveImages = save; _cfg.Save(); }
 
-            if (InputTextRef("Save Subdir", _cfg.ImageSaveSubdir ?? "images", out var subdirNext))
-            { _cfg.ImageSaveSubdir = subdirNext; _cfg.Save(); }
+            string dir = _cfg.ImageSaveSubdir ?? string.Empty;
+            if (ImGui.InputText("Save Subdir", ref dir, 128)) { _cfg.ImageSaveSubdir = dir; _cfg.Save(); }
         }
 
-        // ================= UI prefs =================
         private void DrawUiPrefs()
         {
-            ImGui.TextUnformatted("Window & Layout");
+            ImGui.TextUnformatted("Chat Window");
             ImGui.Separator();
 
-            BoolCheckbox("Open chat on login", _cfg.StartOpen, v => _cfg.StartOpen = v);
-            FloatSlider("Window Opacity", _cfg.WindowOpacity, 0.3f, 1.0f, v => _cfg.WindowOpacity = v);
-            BoolCheckbox("ASCII-safe output", _cfg.AsciiSafe, v => _cfg.AsciiSafe = v);
-            BoolCheckbox("Two-pane chat", _cfg.TwoPaneMode, v => _cfg.TwoPaneMode = v);
-            BoolCheckbox("Show copy buttons", _cfg.ShowCopyButtons, v => _cfg.ShowCopyButtons = v);
-            FloatSlider("Font Scale", _cfg.FontScale, 0.8f, 1.6f, v => _cfg.FontScale = v);
-            BoolCheckbox("Lock window position", _cfg.LockWindow, v => _cfg.LockWindow = v);
+            bool start = _cfg.StartOpen;
+            if (ImGui.Checkbox("Open on Start", ref start)) { _cfg.StartOpen = start; _cfg.Save(); }
+
+            float op = _cfg.WindowOpacity;
+            if (ImGui.SliderFloat("Window Opacity", ref op, 0.3f, 1.0f)) { _cfg.WindowOpacity = op; _cfg.Save(); }
+
+            float fs = _cfg.FontScale;
+            if (ImGui.SliderFloat("Font Scale", ref fs, 0.8f, 1.6f)) { _cfg.FontScale = fs; _cfg.Save(); }
+
+            bool ascii = _cfg.AsciiSafe;
+            if (ImGui.Checkbox("ASCII Safe Output", ref ascii)) { _cfg.AsciiSafe = ascii; _cfg.Save(); }
+
+            bool two = _cfg.TwoPaneMode;
+            if (ImGui.Checkbox("Two Pane Mode", ref two)) { _cfg.TwoPaneMode = two; _cfg.Save(); }
+
+            bool copy = _cfg.ShowCopyButtons;
+            if (ImGui.Checkbox("Show Copy Buttons", ref copy)) { _cfg.ShowCopyButtons = copy; _cfg.Save(); }
+
+            bool lockw = _cfg.LockWindow;
+            if (ImGui.Checkbox("Lock Window", ref lockw)) { _cfg.LockWindow = lockw; _cfg.Save(); }
+
+            string name = _cfg.ChatDisplayName ?? string.Empty;
+            if (ImGui.InputText("Display Name", ref name, 64)) { _cfg.ChatDisplayName = name; _cfg.Save(); }
         }
 
-        // ================= Environment =================
         private void DrawEnvironment()
         {
             ImGui.TextUnformatted("Environment Awareness");
             ImGui.Separator();
-
-            bool enabled = _cfg.EnvironmentEnabled;
-            if (ImGui.Checkbox("Enable", ref enabled))
-            { _cfg.EnvironmentEnabled = enabled; _cfg.Save(); }
-
-            int tick = _cfg.EnvTickSeconds;
-            if (ImGui.SliderInt("Tick (sec)", ref tick, 1, 10))
-            { _cfg.EnvTickSeconds = tick; _cfg.Save(); }
-
-            BoolCheckbox("Announce zone/duty changes", _cfg.EnvAnnounceOnChange, v => _cfg.EnvAnnounceOnChange = v);
-
-            ImGui.Separator();
-
-            BoolCheckbox("Include Zone", _cfg.EnvIncludeZone, v => _cfg.EnvIncludeZone = v);
-            BoolCheckbox("Include Time", _cfg.EnvIncludeTime, v => _cfg.EnvIncludeTime = v);
-            BoolCheckbox("Include Duty/Combat", _cfg.EnvIncludeDuty, v => _cfg.EnvIncludeDuty = v);
-            BoolCheckbox("Include Coords", _cfg.EnvIncludeCoords, v => _cfg.EnvIncludeCoords = v);
+            ImGui.TextWrapped("Environment toggles can also be changed via /nunu set/toggle. This tab intentionally avoids direct sheet bindings to keep compatibility.");
         }
 
-        // ================= Debug =================
         private void DrawDebug()
         {
             ImGui.TextUnformatted("Debug");
             ImGui.Separator();
 
-            BoolCheckbox("Mirror listener to window", _cfg.DebugMirrorToWindow, v => _cfg.DebugMirrorToWindow = v);
-            BoolCheckbox("Debug listen log", _cfg.DebugListen, v => _cfg.DebugListen = v);
-        }
+            bool dbgListen = _cfg.DebugListen;
+            if (ImGui.Checkbox("Debug Listen", ref dbgListen)) { _cfg.DebugListen = dbgListen; _cfg.Save(); }
 
-        // ================= Helpers (non-generic, ref-string, int maxLen) =================
-
-        private static bool InputTextRef(string label, string current, out string result, int max = 512)
-        {
-            var buf = current ?? string.Empty;
-            var changed = ImGui.InputText(label, ref buf, max, ImGuiInputTextFlags.None);
-            result = buf ?? string.Empty;
-            return changed;
-        }
-
-        private static bool InputTextMultilineRef(string label, string current, int lines, out string result, int max = 4096)
-        {
-            var buf = current ?? string.Empty;
-            var size = new Vector2(-1f, lines * ImGui.GetTextLineHeightWithSpacing() + 8f);
-            var changed = ImGui.InputTextMultiline(label, ref buf, max, size, ImGuiInputTextFlags.None);
-            result = buf ?? string.Empty;
-            return changed;
-        }
-
-        private void BoolCheckbox(string label, bool current, System.Action<bool> setter)
-        {
-            var v = current;
-            if (ImGui.Checkbox(label, ref v)) { setter(v); _cfg.Save(); }
-        }
-
-        private void IntSlider(string label, int current, int min, int max, System.Action<int> setter)
-        {
-            int v = current;
-            if (ImGui.SliderInt(label, ref v, min, max)) { setter(v); _cfg.Save(); }
-        }
-
-        private void FloatSlider(string label, float current, float min, float max, System.Action<float> setter)
-        {
-            float v = current;
-            if (ImGui.SliderFloat(label, ref v, min, max)) { setter(v); _cfg.Save(); }
+            bool mirror = _cfg.DebugMirrorToWindow;
+            if (ImGui.Checkbox("Mirror Debug to Chat Window", ref mirror)) { _cfg.DebugMirrorToWindow = mirror; _cfg.Save(); }
         }
     }
 }
