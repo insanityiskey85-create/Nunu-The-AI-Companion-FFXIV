@@ -73,9 +73,15 @@ namespace NunuTheAICompanion
         private EmotionManager _emotions = new EmotionManager();
         private DateTime _lastEmotionChangeUtc = DateTime.UtcNow;
 
+        // Stream-safe emotion marker parsing
+        private string _emotionScanTail = "";
         private static readonly Regex EmotionMarker = new Regex(
-            @"[\(\[]\s*emotion\s*:\s*([a-zA-Z]+)\s*[\)\]]",
+            @"[\(\[\{\<]\s*emotion\s*:\s*([a-zA-Z]+)\s*[\)\]\}\>]",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        // ===== Dreaming Mode =====
+        private System.Threading.Timer? _dreamTimer;
+        private DateTime _lastUserInteractionUtc = DateTime.UtcNow;
 
         public PluginMain()
         {
@@ -160,6 +166,9 @@ namespace NunuTheAICompanion
             // ---- Emotion Engine
             InitializeEmotionEngine();
 
+            // ---- Dreaming Mode
+            InitializeDreaming();
+
             // ---- Greeting
             ChatWindow.AppendAssistant("Nunu is awake. Ask me anything—or play me a memory.");
         }
@@ -170,6 +179,7 @@ namespace NunuTheAICompanion
             try { _broadcaster?.Dispose(); } catch { }
             try { _ipcRelay?.Dispose(); } catch { }
             try { Voice?.Dispose(); } catch { }
+            try { _dreamTimer?.Dispose(); } catch { }
 
             try
             {
@@ -253,12 +263,16 @@ namespace NunuTheAICompanion
 
         private void OnUserUtterance(string author, string text, CancellationToken token)
         {
+            _lastUserInteractionUtc = DateTime.UtcNow; // dreaming idle reset
+
             if (_threads is null) { Memory.Append("user", text, topic: author); return; }
             _threads.AppendAndThread("user", text, author, token);
         }
 
         private void OnAssistantReply(string author, string reply, CancellationToken token)
         {
+            _lastUserInteractionUtc = DateTime.UtcNow; // dreaming idle reset
+
             if (_threads is null) { Memory.Append("assistant", reply, topic: author); return; }
             _threads.AppendAndThread("assistant", reply, author, token);
         }
@@ -401,9 +415,119 @@ namespace NunuTheAICompanion
             try { _emotions.Set(emo); Log.Debug($"[Emotion] -> {emo} ({reason})"); } catch { }
         }
 
+        // ===== Dreaming Mode =====
+        private void InitializeDreaming()
+        {
+            try { _dreamTimer?.Dispose(); } catch { }
+            if (!Config.DreamingEnabled)
+            {
+                _dreamTimer = null;
+                return;
+            }
+
+            // check every minute
+            _dreamTimer = new System.Threading.Timer(CheckDreamCycle, null,
+                dueTime: TimeSpan.FromMinutes(1),
+                period: TimeSpan.FromMinutes(1));
+        }
+
+        private void CheckDreamCycle(object? state)
+        {
+            try
+            {
+                if (!Config.DreamingEnabled) return;
+                if (_isStreaming) return;
+
+                var idleMins = (DateTime.UtcNow - _lastUserInteractionUtc).TotalMinutes;
+                if (idleMins < Config.DreamingIdleMinutes) return;
+
+                // fire-and-forget dream task
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        var dream = await ComposeDreamAsync();
+                        if (!string.IsNullOrWhiteSpace(dream))
+                        {
+                            Memory.Append("dream", dream.Trim(), topic: "subconscious");
+                            if (Config.DreamingShowInChat)
+                                ChatWindow.AppendAssistant($"[Dream] {dream.Trim()}");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warning(ex, "[Dreaming] compose failed");
+                    }
+                    finally
+                    {
+                        // reset idle so we don't immediately dream again
+                        _lastUserInteractionUtc = DateTime.UtcNow;
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "[Dreaming] timer tick failed");
+            }
+        }
+
+        private async Task<string> ComposeDreamAsync()
+        {
+            // Build seeds from recent context (role-tagged)
+            var recent = Memory.GetRecentForContext(Math.Max(4, Config.ThreadContextMaxRecent));
+            var lines = new List<string>();
+            foreach (var (role, content) in recent)
+            {
+                if (string.IsNullOrWhiteSpace(content)) continue;
+                // Keep short, avoid blowing up prompt
+                var trimmed = content.Length > 200 ? content.Substring(0, 200) + "…" : content;
+                lines.Add($"{role}: {trimmed}");
+                if (lines.Count >= 6) break;
+            }
+
+            var mood = _emotions.Current.ToString();
+
+            var sys = "You are Little Nunu, the Soul Weeper—a void-touched bard of Eorzea. " +
+                      "You are dreaming while the player is idle. " +
+                      "Write 1–2 short poetic lines (no more than 180 characters total), reflective and metaphorical, inspired by the seeds. " +
+                      "Do not include code fences or markdown. Keep it diegetic to FFXIV.";
+
+            var user = $"Emotion: {mood}\nSeeds:\n- " + string.Join("\n- ", lines) +
+                       "\nDream now in one or two short lines.";
+
+            var chat = new List<(string role, string content)>
+            {
+                ("system", sys),
+                ("user", user),
+            };
+
+            var client = new OllamaClient(_http, Config);
+
+            // aggregate via streaming API (so we don't add new client method)
+            string dream = "";
+            await foreach (var raw in client.StreamChatAsync(Config.BackendUrl, chat, CancellationToken.None))
+            {
+                if (!string.IsNullOrEmpty(raw))
+                    dream += raw;
+            }
+
+            // Trim emotion markers if the model added any
+            if (!string.IsNullOrWhiteSpace(dream))
+            {
+                dream = EmotionMarker.Replace(dream, "");
+                dream = dream.Trim();
+                // Be safe: keep very short
+                if (dream.Length > 240) dream = dream.Substring(0, 240);
+            }
+
+            return dream ?? "";
+        }
+
         // ===== Inbound path =====
         private void OnHeardFromChat(string author, string text)
         {
+            _lastUserInteractionUtc = DateTime.UtcNow; // dreaming idle reset
+
             if (TryHandleBardCall(author, text))
                 return;
 
@@ -412,6 +536,8 @@ namespace NunuTheAICompanion
 
         private void HandleUserSend(string text)
         {
+            _lastUserInteractionUtc = DateTime.UtcNow; // dreaming idle reset
+
             try
             {
                 var who = string.IsNullOrWhiteSpace(Config.ChatDisplayName) ? "You" : Config.ChatDisplayName;
@@ -425,7 +551,7 @@ namespace NunuTheAICompanion
             // Begin UI streaming
             ChatWindow.BeginAssistantStream();
 
-            // Build context (thread + recents) then add the current turn
+            // Build context then add the current turn
             var request = BuildContext(text, CancellationToken.None);
             request.Add(("user", text));
 
@@ -455,26 +581,41 @@ namespace NunuTheAICompanion
 
                 await foreach (var raw in client.StreamChatAsync(Config.BackendUrl, chat, cts.Token))
                 {
-                    var chunk = raw ?? "";
+                    var incoming = raw ?? "";
+                    var visibleChunk = incoming;
 
-                    // detect and consume emotion markers
+                    // stream-safe emotion markers
                     if (Config.EmotionEnabled && Config.EmotionPromptMarkersEnabled)
                     {
-                        var m = EmotionMarker.Match(chunk);
-                        if (m.Success)
+                        var scan = _emotionScanTail + incoming;
+
+                        var matches = EmotionMarker.Matches(scan);
+                        foreach (Match m in matches)
                         {
                             var name = m.Groups[1].Value;
                             if (EmotionManager.TryParse(name, out var emo))
                                 SafeSetEmotion(emo, "marker");
-                            chunk = EmotionMarker.Replace(chunk, ""); // strip marker
                         }
+
+                        var cleaned = EmotionMarker.Replace(scan, "");
+                        if (cleaned.Length >= _emotionScanTail.Length)
+                            visibleChunk = cleaned.Substring(_emotionScanTail.Length);
+                        else
+                            visibleChunk = "";
+
+                        const int TailKeep = 24;
+                        _emotionScanTail = scan.Length > TailKeep ? scan.Substring(scan.Length - TailKeep) : scan;
                     }
 
-                    if (string.IsNullOrEmpty(chunk)) continue;
+                    if (string.IsNullOrEmpty(visibleChunk)) continue;
 
-                    reply += chunk;
-                    ChatWindow.AppendAssistantDelta(chunk); // stream deltas to UI
+                    reply += visibleChunk;
+                    ChatWindow.AppendAssistantDelta(visibleChunk); // stream deltas to UI
                 }
+
+                // final sweep
+                if (Config.EmotionEnabled && Config.EmotionPromptMarkersEnabled && !string.IsNullOrEmpty(reply))
+                    reply = EmotionMarker.Replace(reply, "");
 
                 ChatWindow.EndAssistantStream();
 
@@ -511,6 +652,7 @@ namespace NunuTheAICompanion
             {
                 StopTypingIndicator(); // always stop
                 _isStreaming = false;
+                _lastUserInteractionUtc = DateTime.UtcNow; // dreaming idle reset after assistant speaks
                 try { cts.Dispose(); } catch { }
             }
         }
@@ -623,6 +765,11 @@ namespace NunuTheAICompanion
             d.Add("emotion.default", nameof(Configuration.EmotionDefault));
             d.Add("emotion.lock", nameof(Configuration.EmotionLock));
 
+            // Dreaming
+            d.Add("dream", nameof(Configuration.DreamingEnabled));
+            d.Add("dream.idle", nameof(Configuration.DreamingIdleMinutes));
+            d.Add("dream.show", nameof(Configuration.DreamingShowInChat));
+
             // UI
             d.Add("startopen", nameof(Configuration.StartOpen));
             d.Add("opacity", nameof(Configuration.WindowOpacity));
@@ -680,6 +827,11 @@ namespace NunuTheAICompanion
             "/nunu emotion set <neutral|happy|curious|playful|mournful|sad|angry|tired>",
             "/nunu emotion lock <true|false>",
             "/nunu emotion emote <true|false>",
+            "/nunu dream                             -> show dreaming status",
+            "/nunu dream on|off                      -> enable/disable dreaming",
+            "/nunu dream idle <minutes>              -> set idle minutes before dreaming",
+            "/nunu dream show <true|false>           -> echo dreams into chat window",
+            "/nunu dream now                         -> force a dream once",
         });
 
         private void HandleSlashCommand(string raw)
@@ -714,6 +866,7 @@ namespace NunuTheAICompanion
                 case "echo": CmdEcho(parts); return;
                 case "song": CmdSong(parts); return;
                 case "emotion": CmdEmotion(parts); return;
+                case "dream": CmdDream(parts); return;
 
                 case "config":
                     ConfigWindow.IsOpen = true; return;
@@ -727,7 +880,83 @@ namespace NunuTheAICompanion
             }
         }
 
-        // ===== Slash subcommand implementations =====
+        private void CmdDream(List<string> parts)
+        {
+            if (parts.Count == 1)
+            {
+                ChatWindow.AppendSystem($"Dreaming: {(Config.DreamingEnabled ? "on" : "off")} | idle={Config.DreamingIdleMinutes}m | show={(Config.DreamingShowInChat ? "on" : "off")}");
+                return;
+            }
+
+            var sub = parts[1].ToLowerInvariant();
+
+            if (sub is "on" or "off")
+            {
+                Config.DreamingEnabled = sub == "on";
+                Config.Save();
+                InitializeDreaming();
+                ChatWindow.AppendSystem($"Dreaming {(Config.DreamingEnabled ? "enabled" : "disabled")}.");
+                return;
+            }
+
+            if (sub == "idle")
+            {
+                if (parts.Count < 3) { ChatWindow.AppendSystem("dream idle <minutes>"); return; }
+                if (int.TryParse(parts[2], out var mins) && mins >= 1 && mins <= 240)
+                {
+                    Config.DreamingIdleMinutes = mins;
+                    Config.Save();
+                    ChatWindow.AppendSystem($"Dreaming idle minutes = {mins}");
+                }
+                else ChatWindow.AppendSystem("Please provide minutes between 1 and 240.");
+                return;
+            }
+
+            if (sub == "show")
+            {
+                if (parts.Count < 3) { ChatWindow.AppendSystem("dream show <true|false>"); return; }
+                if (bool.TryParse(parts[2], out var b))
+                {
+                    Config.DreamingShowInChat = b;
+                    Config.Save();
+                    ChatWindow.AppendSystem($"Dreaming show in chat = {b}");
+                }
+                else ChatWindow.AppendSystem("dream show expects true/false");
+                return;
+            }
+
+            if (sub == "now")
+            {
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        var dream = await ComposeDreamAsync();
+                        if (!string.IsNullOrWhiteSpace(dream))
+                        {
+                            Memory.Append("dream", dream.Trim(), topic: "subconscious");
+                            if (Config.DreamingShowInChat)
+                                ChatWindow.AppendAssistant($"[Dream] {dream.Trim()}");
+                            ChatWindow.AppendSystem("[Dreaming] Composed.");
+                        }
+                        else
+                        {
+                            ChatWindow.AppendSystem("[Dreaming] No dream produced.");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warning(ex, "[Dreaming] now failed");
+                        ChatWindow.AppendSystem("[Dreaming] Error (see logs).");
+                    }
+                });
+                return;
+            }
+
+            ChatWindow.AppendSystem("dream | dream on|off | dream idle <minutes> | dream show <true|false> | dream now");
+        }
+
+        // ===== Slash subcommand implementations (existing) =====
 
         private void CmdOpen(List<string> parts)
         {
@@ -1091,6 +1320,12 @@ namespace NunuTheAICompanion
                 _echoChannel = ParseChannel(Config.EchoChannel);
                 ChatWindow.AppendSystem($"[echo] channel set to {Config.EchoChannel}");
                 return;
+            }
+
+            // Dreaming toggles
+            if (key.StartsWith("Dreaming", StringComparison.OrdinalIgnoreCase))
+            {
+                InitializeDreaming();
             }
 
             // UI niceties

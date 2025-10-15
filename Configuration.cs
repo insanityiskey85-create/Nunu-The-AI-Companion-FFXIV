@@ -7,16 +7,16 @@ namespace NunuTheAICompanion;
 
 public sealed class Configuration : Dalamud.Configuration.IPluginConfiguration
 {
-    public int Version { get; set; } = 6;
+    public int Version { get; set; } = 7;
 
     // -------- Backend --------
     public string BackendMode { get; set; } = "ollama";
     public string BackendUrl { get; set; } = "http://127.0.0.1:11434";
-    public string ModelName { get; set; } = "nunu-8b";
+    public string ModelName { get; set; } = "nunu";
     public float Temperature { get; set; } = 0.7f;
     public string SystemPrompt { get; set; } =
-        "You are Little Nunu, the Soul Weeper. Stay in FFXIV voice; be helpful and kind.";
-    public string ChatDisplayName { get; set; } = "Real Nunu @Architect";
+        "You are Little Nunu, the Soul Weeper. Stay in FFXIV voice; be helpful and kind. When your emotional tone shifts, you may include a short inline marker like (emotion: happy) or [emotion: mournful].";
+    public string ChatDisplayName { get; set; } = "You";
 
     // Compat endpoints for other services
     public string ChatEndpointUrl { get; set; } = "http://127.0.0.1:11434/api/chat";
@@ -40,7 +40,7 @@ public sealed class Configuration : Dalamud.Configuration.IPluginConfiguration
     public string? SongcraftSaveDir { get; set; } = null;
 
     // -------- Voice --------
-    public bool VoiceSpeakEnabled { get; set; } = true;
+    public bool VoiceSpeakEnabled { get; set; } = false;
     public string? VoiceName { get; set; }
     public int VoiceRate { get; set; } = 0;     // -10..10
     public int VoiceVolume { get; set; } = 100; // 0..100
@@ -48,16 +48,16 @@ public sealed class Configuration : Dalamud.Configuration.IPluginConfiguration
 
     // -------- Listen --------
     public bool ListenEnabled { get; set; } = true;
-    public bool ListenSelf { get; set; } = true;
+    public bool ListenSelf { get; set; } = false;
     public bool ListenSay { get; set; } = true;
     public bool ListenTell { get; set; } = true;
     public bool ListenParty { get; set; } = true;
     public bool ListenAlliance { get; set; } = false;
-    public bool ListenFreeCompany { get; set; } = true;
+    public bool ListenFreeCompany { get; set; } = false;
     public bool ListenShout { get; set; } = false;
     public bool ListenYell { get; set; } = false;
-    public bool RequireCallsign { get; set; } = true;
-    public string Callsign { get; set; } = "@Little Nunu";
+    public bool RequireCallsign { get; set; } = false;
+    public string Callsign { get; set; } = "@nunu";
 
     // ---- Whitelist ----
     public List<string> Whitelist { get; set; } = new List<string>();
@@ -76,22 +76,27 @@ public sealed class Configuration : Dalamud.Configuration.IPluginConfiguration
 
     // -------- Typing Indicator --------
     public bool TypingIndicatorEnabled { get; set; } = true;
-    public string TypingIndicatorMessage { get; set; } = "Little Nunu is writing ....Please wait to send another message Patience is a virtue! WAH!";
+    public string TypingIndicatorMessage { get; set; } = "Little Nunu is writing ....";
     public bool TypingIndicatorSendDone { get; set; } = false;
     public string TypingIndicatorDoneMessage { get; set; } = "…done.";
 
-    // -------- Emotion Engine (NEW) --------
+    // -------- Emotion Engine --------
     public bool EmotionEnabled { get; set; } = true;
-    public bool EmotionEmitEmote { get; set; } = true;            // send /em lines on change
-    public bool EmotionPromptMarkersEnabled { get; set; } = true; // model can send (emotion: X)
-    public int EmotionDecaySeconds { get; set; } = 120;           // revert to Neutral after idle
-    public string EmotionDefault { get; set; } = "Neutral";       // initial state
-    public bool EmotionLock { get; set; } = false;                // prevent auto-changes
+    public bool EmotionEmitEmote { get; set; } = true;
+    public bool EmotionPromptMarkersEnabled { get; set; } = true;
+    public int EmotionDecaySeconds { get; set; } = 120;
+    public string EmotionDefault { get; set; } = "Neutral";
+    public bool EmotionLock { get; set; } = false;
+
+    // -------- Dreaming Mode (NEW) --------
+    public bool DreamingEnabled { get; set; } = true;
+    public int DreamingIdleMinutes { get; set; } = 10;     // idle threshold
+    public bool DreamingShowInChat { get; set; } = true;   // echo dream into chat window
 
     // -------- UI --------
     public bool StartOpen { get; set; } = true;
     public float WindowOpacity { get; set; } = 1.0f;
-    public bool AsciiSafe { get; set; } = true;
+    public bool AsciiSafe { get; set; } = false;
     public bool TwoPaneMode { get; set; } = true;
     public bool ShowCopyButtons { get; set; } = true;
     public float FontScale { get; set; } = 1.0f;
@@ -112,15 +117,15 @@ public sealed class Configuration : Dalamud.Configuration.IPluginConfiguration
     public string ImageSaveSubdir { get; set; } = "Images";
 
     // -------- Search --------
-    public bool AllowInternet { get; set; } = true;
+    public bool AllowInternet { get; set; } = false;
     public string SearchBackend { get; set; } = "serpapi";
-    public string SearchApiKey { get; set; } = "a7913350a7306681a9dc0546e1e9ba2372930f19da59b8b444f96e2a22f77e63";
+    public string SearchApiKey { get; set; } = "";
     public int SearchMaxResults { get; set; } = 5;
     public int SearchTimeoutSec { get; set; } = 20;
 
     // -------- Debug --------
-    public bool DebugMirrorToWindow { get; set; } = true;
-    public bool DebugListen { get; set; } = true;
+    public bool DebugMirrorToWindow { get; set; } = false;
+    public bool DebugListen { get; set; } = false;
 
     [NonSerialized] private IDalamudPluginInterface? _pi;
 
