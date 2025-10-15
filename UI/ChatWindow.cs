@@ -402,5 +402,10 @@ namespace NunuTheAICompanion.UI
             // also show a typing indicator in system banner & right pane if streaming is about to start
             // (PluginMain starts streaming immediately after calling HandleUserSend)
         }
+
+        internal void SetMoodColor(Vector4 vector4)
+        {
+            throw new NotImplementedException();
+        }
     }
 }
