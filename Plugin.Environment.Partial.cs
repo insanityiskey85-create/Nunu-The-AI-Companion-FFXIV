@@ -18,6 +18,7 @@ namespace NunuTheAICompanion
         {
             try
             {
+                // matches EnvironmentService ctor: (Framework, ClientState, Condition, Log, Config)
                 _env = new EnvironmentService(Framework, ClientState, Condition, Log, Config);
                 Log.Info("[Env] Environment awareness initialized (no Lumina).");
             }
@@ -36,10 +37,8 @@ namespace NunuTheAICompanion
             if (string.IsNullOrWhiteSpace(sys))
                 return baseContext;
 
-            var ctx = new List<(string role, string content)>(baseContext.Count + 1)
-            {
-                ("system", sys)
-            };
+            var ctx = new List<(string role, string content)>(baseContext.Count + 1);
+            ctx.Add(("system", sys));   // explicit Add avoids nullable tuple inference weirdness
             ctx.AddRange(baseContext);
             return ctx;
         }

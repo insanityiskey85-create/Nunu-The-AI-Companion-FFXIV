@@ -43,6 +43,7 @@ namespace NunuTheAICompanion
 
         internal MemoryService Memory { get; private set; } = null!;
         internal VoiceService? Voice { get; private set; }
+        public Configuration Configuration { get; internal set; }
 
         private readonly HttpClient _http = new();
 

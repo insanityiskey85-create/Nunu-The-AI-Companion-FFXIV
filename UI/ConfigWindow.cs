@@ -1,7 +1,4 @@
-﻿#nullable enable
-using System;
-using System.Numerics;
-using System.Text;
+﻿using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
 
@@ -9,263 +6,333 @@ namespace NunuTheAICompanion.UI
 {
     public sealed class ConfigWindow : Window
     {
-        private static Configuration C => PluginMain.Instance.Configuration;
+        private readonly Configuration _cfg;
 
-        // --- text buffers (sizes chosen generously) ---
-        private static byte[] _bufName = NewBuf(C.ChatDisplayName ?? "Little Nunu", 256);
-        private static byte[] _bufMode = NewBuf(C.BackendMode ?? "ollama", 64);
-        private static byte[] _bufUrl = NewBuf(C.BackendUrl ?? "http://127.0.0.1:11434", 256);
-        private static byte[] _bufModel = NewBuf(C.ModelName ?? "nunu-8b", 128);
-        private static byte[] _bufSys = NewBuf(C.SystemPrompt ?? string.Empty, 4096);
-        private static byte[] _bufCall = NewBuf(C.Callsign ?? "@nunu", 64);
-        private static byte[] _bufWl = NewBuf(C.Whitelist ?? string.Empty, 4096);
-        private static byte[] _bufVName = NewBuf(C.VoiceName ?? "Female", 128);
-
-        public ConfigWindow()
-            : base("Nunu — Configuration", ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse)
+        public ConfigWindow(Configuration cfg)
+            : base("Nunu — Configuration", ImGuiWindowFlags.NoCollapse)
         {
-            SizeCondition = ImGuiCond.FirstUseEver;
-            RespectCloseHotkey = true;
-        }
-
-        public ConfigWindow(Configuration config)
-        {
+            _cfg = cfg;
+            SizeConstraints = new WindowSizeConstraints
+            {
+                MinimumSize = new Vector2(560, 440),
+                MaximumSize = new Vector2(4096, 4096),
+            };
         }
 
         public override void Draw()
         {
-            if (ImGui.BeginTabBar("nunu_cfg_tabs"))
-            {
-                if (ImGui.BeginTabItem("General")) { DrawGeneral(); ImGui.EndTabItem(); }
-                if (ImGui.BeginTabItem("Chat")) { DrawChat(); ImGui.EndTabItem(); }
-                if (ImGui.BeginTabItem("Listen")) { DrawListen(); ImGui.EndTabItem(); }
-                if (ImGui.BeginTabItem("Voice")) { DrawVoice(); ImGui.EndTabItem(); }
-                ImGui.EndTabBar();
-            }
+            if (!ImGui.BeginTabBar("##nunu_cfg_tabs"))
+                return;
+
+            if (ImGui.BeginTabItem("Core")) { DrawCore(); ImGui.EndTabItem(); }
+            if (ImGui.BeginTabItem("Memory / Threads")) { DrawMemory(); ImGui.EndTabItem(); }
+            if (ImGui.BeginTabItem("Songcraft")) { DrawSongcraft(); ImGui.EndTabItem(); }
+            if (ImGui.BeginTabItem("Voice")) { DrawVoice(); ImGui.EndTabItem(); }
+            if (ImGui.BeginTabItem("Listen")) { DrawListen(); ImGui.EndTabItem(); }
+            if (ImGui.BeginTabItem("Broadcast / IPC")) { DrawBroadcast(); ImGui.EndTabItem(); }
+            if (ImGui.BeginTabItem("Search")) { DrawSearch(); ImGui.EndTabItem(); }
+            if (ImGui.BeginTabItem("Images")) { DrawImages(); ImGui.EndTabItem(); }
+            if (ImGui.BeginTabItem("UI")) { DrawUiPrefs(); ImGui.EndTabItem(); }
+            if (ImGui.BeginTabItem("Environment")) { DrawEnvironment(); ImGui.EndTabItem(); }
+            if (ImGui.BeginTabItem("Debug")) { DrawDebug(); ImGui.EndTabItem(); }
+
+            ImGui.EndTabBar();
         }
 
-        private static void DrawGeneral()
+        // ================= Core =================
+        private void DrawCore()
         {
-            var startOpen = C.StartOpen;
-            if (ImGui.Checkbox("Open chat window on login", ref startOpen))
-            {
-                if (startOpen != C.StartOpen) { C.StartOpen = startOpen; C.Save(); }
-            }
-
-            var opacity = C.WindowOpacity;
-            if (ImGui.SliderFloat("Window opacity", ref opacity, 0.3f, 1.0f, "%.2f"))
-            {
-                if (Math.Abs(opacity - C.WindowOpacity) > 0.0001f) { C.WindowOpacity = opacity; C.Save(); }
-            }
-
-            var ascii = C.AsciiSafe;
-            if (ImGui.Checkbox("ASCII-safe rendering", ref ascii))
-            {
-                if (ascii != C.AsciiSafe) { C.AsciiSafe = ascii; C.Save(); }
-            }
-        }
-
-        private static void DrawChat()
-        {
-            ImGui.TextUnformatted("Assistant display name");
-            ImGui.PushID("dispname");
-            if (ImGui.InputTextMultiline("##disp",
-                _bufName, (uint)_bufName.Length,
-                new Vector2(-1, ImGui.GetTextLineHeight() * 2)))
-            {
-                SyncIfChanged(_bufName, ref C.ChatDisplayName);
-            }
-            ImGui.PopID();
-
-            ImGui.Separator();
-            ImGui.TextDisabled("Backend");
-
-            ImGui.TextUnformatted("Mode (ollama/openai/http)");
-            ImGui.PushID("backmode");
-            if (ImGui.InputTextMultiline("##mode",
-                _bufMode, (uint)_bufMode.Length,
-                new Vector2(-1, ImGui.GetTextLineHeight() * 2)))
-            {
-                SyncIfChanged(_bufMode, ref C.BackendMode);
-            }
-            ImGui.PopID();
-
-            ImGui.TextUnformatted("Backend URL");
-            ImGui.PushID("backurl");
-            if (ImGui.InputTextMultiline("##url",
-                _bufUrl, (uint)_bufUrl.Length,
-                new Vector2(-1, ImGui.GetTextLineHeight() * 2)))
-            {
-                SyncIfChanged(_bufUrl, ref C.BackendUrl);
-            }
-            ImGui.PopID();
-
-            ImGui.TextUnformatted("Model name");
-            ImGui.PushID("model");
-            if (ImGui.InputTextMultiline("##model",
-                _bufModel, (uint)_bufModel.Length,
-                new Vector2(-1, ImGui.GetTextLineHeight() * 2)))
-            {
-                SyncIfChanged(_bufModel, ref C.ModelName);
-            }
-            ImGui.PopID();
-
-            var temp = C.Temperature;
-            if (ImGui.SliderFloat("Temperature", ref temp, 0.0f, 1.5f, "%.2f"))
-            {
-                if (Math.Abs(temp - C.Temperature) > 0.0001f) { C.Temperature = temp; C.Save(); }
-            }
-
-            ImGui.Spacing();
-            ImGui.TextDisabled("System Prompt");
-            ImGui.PushID("sysprompt");
-            if (ImGui.InputTextMultiline("##sysprompt_text",
-                _bufSys, (uint)_bufSys.Length,
-                new Vector2(-1, 180)))
-            {
-                SyncIfChanged(_bufSys, ref C.SystemPrompt);
-            }
-            ImGui.PopID();
-        }
-
-        private static void DrawListen()
-        {
-            var enabled = C.ListenEnabled;
-            if (ImGui.Checkbox("Enable listening to game chat", ref enabled))
-            {
-                if (enabled != C.ListenEnabled) { C.ListenEnabled = enabled; C.Save(); }
-            }
-
+            ImGui.TextUnformatted("Backend");
             ImGui.Separator();
 
-            var req = C.RequireCallsign;
-            if (ImGui.Checkbox("Require callsign", ref req))
-            {
-                if (req != C.RequireCallsign) { C.RequireCallsign = req; C.Save(); }
-            }
+            if (InputTextRef("Backend URL", _cfg.BackendUrl ?? string.Empty, out var backendNext))
+            { _cfg.BackendUrl = backendNext; _cfg.Save(); }
 
-            ImGui.TextUnformatted("Callsign (e.g. @nunu)");
-            ImGui.PushID("callsign");
-            if (ImGui.InputTextMultiline("##callsign_text",
-                _bufCall, (uint)_bufCall.Length,
-                new Vector2(-1, ImGui.GetTextLineHeight() * 2)))
-            {
-                SyncIfChanged(_bufCall, ref C.Callsign);
-            }
-            ImGui.PopID();
+            if (InputTextRef("Model Name", _cfg.ModelName ?? string.Empty, out var modelNext))
+            { _cfg.ModelName = modelNext; _cfg.Save(); }
 
-            var self = C.ListenSelf;
-            if (ImGui.Checkbox("React to my own messages", ref self))
-            {
-                if (self != C.ListenSelf) { C.ListenSelf = self; C.Save(); }
-            }
+            float temp = _cfg.Temperature;
+            if (ImGui.SliderFloat("Temperature", ref temp, 0f, 2f))
+            { _cfg.Temperature = temp; _cfg.Save(); }
 
-            ImGui.Spacing();
-            ImGui.TextDisabled("Whitelist (one name per line; blank = anyone)");
-            ImGui.PushID("whitelist");
-            if (ImGui.InputTextMultiline("##wl_text",
-                _bufWl, (uint)_bufWl.Length,
-                new Vector2(-1, 140)))
-            {
-                SyncIfChanged(_bufWl, ref C.Whitelist);
-            }
-            ImGui.PopID();
+            if (InputTextMultilineRef("System Prompt", _cfg.SystemPrompt ?? string.Empty, 6, out var sysNext))
+            { _cfg.SystemPrompt = sysNext; _cfg.Save(); }
+
+            if (InputTextRef("Display Name", _cfg.ChatDisplayName ?? string.Empty, out var dnNext))
+            { _cfg.ChatDisplayName = dnNext; _cfg.Save(); }
+        }
+
+        // ============ Memory / Threads ============
+        private void DrawMemory()
+        {
+            ImGui.TextUnformatted("Context & Soul Threads");
+            ImGui.Separator();
+
+            IntSlider("Recent Context Turns", _cfg.ContextTurns, 0, 64, v => _cfg.ContextTurns = v);
+            BoolCheckbox("Enable Soul Threads", _cfg.SoulThreadsEnabled, v => _cfg.SoulThreadsEnabled = v);
+
+            if (InputTextRef("Embedding Model", _cfg.EmbeddingModel ?? string.Empty, out var embedNext))
+            { _cfg.EmbeddingModel = embedNext; _cfg.Save(); }
+
+            FloatSlider("Thread Similarity Threshold", _cfg.ThreadSimilarityThreshold, 0.0f, 1.0f, v => _cfg.ThreadSimilarityThreshold = v);
+            IntSlider("Max Lines From Thread", _cfg.ThreadContextMaxFromThread, 0, 64, v => _cfg.ThreadContextMaxFromThread = v);
+            IntSlider("Max Recent Lines", _cfg.ThreadContextMaxRecent, 0, 64, v => _cfg.ThreadContextMaxRecent = v);
+        }
+
+        // ================= Songcraft =================
+        private void DrawSongcraft()
+        {
+            ImGui.TextUnformatted("Songcraft");
+            ImGui.Separator();
+
+            BoolCheckbox("Enable Songcraft", _cfg.SongcraftEnabled, v => _cfg.SongcraftEnabled = v);
+
+            if (InputTextRef("Bard-Call Trigger", _cfg.SongcraftBardCallTrigger ?? "/song", out var trigNext))
+            { _cfg.SongcraftBardCallTrigger = trigNext; _cfg.Save(); }
+
+            if (InputTextRef("Save Directory", _cfg.SongcraftSaveDir ?? string.Empty, out var dirNext))
+            { _cfg.SongcraftSaveDir = dirNext; _cfg.Save(); }
+
+            if (InputTextRef("Default Program", _cfg.SongcraftProgram ?? "piano", out var progNext))
+            { _cfg.SongcraftProgram = progNext; _cfg.Save(); }
+
+            IntSlider("Bars", _cfg.SongcraftBars, 1, 128, v => _cfg.SongcraftBars = v);
+            IntSlider("Tempo (BPM)", _cfg.SongcraftTempoBpm, 40, 240, v => _cfg.SongcraftTempoBpm = v);
+        }
+
+        // ================= Voice =================
+        private void DrawVoice()
+        {
+            ImGui.TextUnformatted("Voice (TTS)");
+            ImGui.Separator();
+
+            BoolCheckbox("Speak replies", _cfg.VoiceSpeakEnabled, v => _cfg.VoiceSpeakEnabled = v);
+
+            if (InputTextRef("Voice Name", _cfg.VoiceName ?? string.Empty, out var voiceNext))
+            { _cfg.VoiceName = voiceNext; _cfg.Save(); }
+
+            FloatSlider("Rate", _cfg.VoiceRate, 0.25f, 2.0f, v => _cfg.VoiceRate = (int)v);
+            FloatSlider("Volume", _cfg.VoiceVolume, 0.0f, 1.0f, v => _cfg.VoiceVolume = (int)v);
+
+            BoolCheckbox("Only when chat window focused", _cfg.VoiceOnlyWhenWindowFocused, v => _cfg.VoiceOnlyWhenWindowFocused = v);
+        }
+
+        // ================= Listen =================
+        private void DrawListen()
+        {
+            ImGui.TextUnformatted("Listening");
+            ImGui.Separator();
+
+            BoolCheckbox("Enable inbound listening", _cfg.ListenEnabled, v => _cfg.ListenEnabled = v);
+
+            if (InputTextRef("Callsign (e.g. nunu:)", _cfg.Callsign ?? string.Empty, out var csNext))
+            { _cfg.Callsign = csNext; _cfg.Save(); }
+
+            BoolCheckbox("Require callsign", _cfg.RequireCallsign, v => _cfg.RequireCallsign = v);
 
             ImGui.Separator();
-            ImGui.TextDisabled("Channels to listen");
 
-            Toggle("Say", C.ListenSay, v => C.ListenSay = v);
-            Toggle("Tell", C.ListenTell, v => C.ListenTell = v);
-            Toggle("Party", C.ListenParty, v => C.ListenParty = v);
-            Toggle("Alliance", C.ListenAlliance, v => C.ListenAlliance = v);
-            Toggle("FreeCompany", C.ListenFreeCompany, v => C.ListenFreeCompany = v);
-            Toggle("Shout", C.ListenShout, v => C.ListenShout = v);
-            Toggle("Yell", C.ListenYell, v => C.ListenYell = v);
+            BoolCheckbox("Self", _cfg.ListenSelf, v => _cfg.ListenSelf = v);
+            BoolCheckbox("Say", _cfg.ListenSay, v => _cfg.ListenSay = v);
+            BoolCheckbox("Tell", _cfg.ListenTell, v => _cfg.ListenTell = v);
+            BoolCheckbox("Party", _cfg.ListenParty, v => _cfg.ListenParty = v);
+            BoolCheckbox("Alliance", _cfg.ListenAlliance, v => _cfg.ListenAlliance = v);
+            BoolCheckbox("Free Company", _cfg.ListenFreeCompany, v => _cfg.ListenFreeCompany = v);
+            BoolCheckbox("Shout", _cfg.ListenShout, v => _cfg.ListenShout = v);
+            BoolCheckbox("Yell", _cfg.ListenYell, v => _cfg.ListenYell = v);
+        }
+
+        // ================= Broadcast / IPC =================
+        private void DrawBroadcast()
+        {
+            ImGui.TextUnformatted("Broadcast & IPC");
+            ImGui.Separator();
+
+            BoolCheckbox("Broadcast as Persona Name", _cfg.BroadcastAsPersona, v => _cfg.BroadcastAsPersona = v);
+
+            if (InputTextRef("Persona Name", _cfg.PersonaName ?? "Nunu", out var pnameNext))
+            { _cfg.PersonaName = pnameNext; _cfg.Save(); }
+
+            if (InputTextRef("Echo Channel (say/party/shout/yell/fc/echo)", _cfg.EchoChannel ?? "party", out var echoNext))
+            { _cfg.EchoChannel = echoNext; _cfg.Save(); }
 
             ImGui.Separator();
-            var dbg = C.DebugListen;
-            if (ImGui.Checkbox("Debug: log every heard line", ref dbg))
-            {
-                if (dbg != C.DebugListen) { C.DebugListen = dbg; C.Save(); }
-            }
+
+            if (InputTextRef("IPC Channel", _cfg.IpcChannelName ?? string.Empty, out var ipcNext))
+            { _cfg.IpcChannelName = ipcNext; _cfg.Save(); }
+
+            BoolCheckbox("Prefer IPC relay over native send", _cfg.PreferIpcRelay, v => _cfg.PreferIpcRelay = v);
         }
 
-        private static void DrawVoice()
+        // ================= Search =================
+        private void DrawSearch()
         {
-            var speak = C.VoiceSpeakEnabled;
-            if (ImGui.Checkbox("Speak assistant replies", ref speak))
-            {
-                if (speak != C.VoiceSpeakEnabled) { C.VoiceSpeakEnabled = speak; C.Save(); }
-            }
+            ImGui.TextUnformatted("Search / Web");
+            ImGui.Separator();
 
-            var focus = C.VoiceOnlyWhenWindowFocused;
-            if (ImGui.Checkbox("Only speak when chat window focused", ref focus))
-            {
-                if (focus != C.VoiceOnlyWhenWindowFocused) { C.VoiceOnlyWhenWindowFocused = focus; C.Save(); }
-            }
+            BoolCheckbox("Allow Internet", _cfg.AllowInternet, v => _cfg.AllowInternet = v);
 
-            ImGui.TextUnformatted("Voice name");
-            ImGui.PushID("vname");
-            if (ImGui.InputTextMultiline("##vname_text",
-                _bufVName, (uint)_bufVName.Length,
-                new Vector2(-1, ImGui.GetTextLineHeight() * 2)))
-            {
-                SyncIfChanged(_bufVName, ref C.VoiceName);
-            }
-            ImGui.PopID();
+            if (InputTextRef("Search Backend", _cfg.SearchBackend ?? string.Empty, out var backendNext))
+            { _cfg.SearchBackend = backendNext; _cfg.Save(); }
 
-            var rate = C.VoiceRate;
-            if (ImGui.SliderInt("Voice rate (percent)", ref rate, -50, 50))
-            {
-                if (rate != C.VoiceRate) { C.VoiceRate = rate; C.Save(); }
-            }
+            if (InputTextRef("Search API Key", _cfg.SearchApiKey ?? string.Empty, out var keyNext))
+            { _cfg.SearchApiKey = keyNext; _cfg.Save(); }
 
-            var vol = C.VoiceVolume;
-            if (ImGui.SliderInt("Voice volume (percent)", ref vol, 0, 200))
-            {
-                if (vol != C.VoiceVolume) { C.VoiceVolume = vol; C.Save(); }
-            }
+            // No ?? "string" — use an int buffer and assign back.
+            int maxResults = _cfg.SearchMaxResults;
+            if (ImGui.SliderInt("Max Results", ref maxResults, 1, 20))
+            { _cfg.SearchMaxResults = maxResults; _cfg.Save(); }
 
-            ImGui.TextDisabled("Note: your synthesis backend should read these values.");
+            int timeout = _cfg.SearchTimeoutSec;
+            if (ImGui.SliderInt("Timeout (sec)", ref timeout, 5, 120))
+            { _cfg.SearchTimeoutSec = timeout; _cfg.Save(); }
         }
 
-        // --- helpers ---
-        private static byte[] NewBuf(string s, int capacity)
-        {
-            // Ensure space for null-terminator; ImGui expects zero-terminated buffers.
-            var buf = new byte[Math.Max(capacity, 16)];
-            var bytes = Encoding.UTF8.GetBytes(s ?? string.Empty);
-            var n = Math.Min(bytes.Length, buf.Length - 1);
-            Array.Copy(bytes, buf, n);
-            buf[n] = 0;
-            return buf;
-        }
 
-        private static string FromBuf(byte[] buf)
+        // ================= Images =================
+        private void DrawImages()
         {
-            var len = Array.IndexOf<byte>(buf, 0);
-            if (len < 0) len = buf.Length;
-            return Encoding.UTF8.GetString(buf, 0, len);
-        }
+            ImGui.TextUnformatted("Images");
+            ImGui.Separator();
 
-        private static void SyncIfChanged(byte[] buf, ref string? target)
-        {
-            var s = FromBuf(buf);
-            if (!string.Equals(s, target, StringComparison.Ordinal))
+            if (InputTextRef("Image Backend", _cfg.ImageBackend ?? string.Empty, out var ibNext))
+            { _cfg.ImageBackend = ibNext; _cfg.Save(); }
+
+            if (InputTextRef("Image Base URL", _cfg.ImageBaseUrl ?? string.Empty, out var urlNext))
+            { _cfg.ImageBaseUrl = urlNext; _cfg.Save(); }
+
+            if (InputTextRef("Image Model", _cfg.ImageModel ?? string.Empty, out var modelNext))
+            { _cfg.ImageModel = modelNext; _cfg.Save(); }
+
             {
-                target = s;
-                C.Save();
+                int steps = (int)_cfg.ImageSteps;
+                if (ImGui.SliderInt("Steps", ref steps, 1, 200))
+                { _cfg.ImageSteps = steps; _cfg.Save(); }
             }
+
+            FloatSlider("CFG", _cfg.ImageGuidance, 0.0f, 30.0f, v => _cfg.ImageGuidance = v);
+
+            {
+                int w = (int)_cfg.ImageWidth;
+                if (ImGui.SliderInt("Width", ref w, 64, 2048))
+                { _cfg.ImageWidth = w; _cfg.Save(); }
+            }
+
+            {
+                int h = (int)_cfg.ImageHeight;
+                if (ImGui.SliderInt("Height", ref h, 64, 2048))
+                { _cfg.ImageHeight = h; _cfg.Save(); }
+            }
+
+            if (InputTextRef("Sampler", _cfg.ImageSampler ?? string.Empty, out var samplerNext))
+            { _cfg.ImageSampler = samplerNext; _cfg.Save(); }
+
+            {
+                int seedLocal = (int)_cfg.ImageSeed;
+                if (ImGui.InputInt("Seed", ref seedLocal))
+                { _cfg.ImageSeed = seedLocal; _cfg.Save(); }
+            }
+
+            {
+                int itime = (int)_cfg.ImageTimeoutSec;
+                if (ImGui.SliderInt("Timeout (sec)", ref itime, 5, 300))
+                { _cfg.ImageTimeoutSec = itime; _cfg.Save(); }
+            }
+
+            BoolCheckbox("Save images to disk", _cfg.SaveImages, v => _cfg.SaveImages = v);
+
+            if (InputTextRef("Save Subdir", _cfg.ImageSaveSubdir ?? "images", out var subdirNext))
+            { _cfg.ImageSaveSubdir = subdirNext; _cfg.Save(); }
         }
 
-        private static void Toggle(string label, bool value, Action<bool> setter)
+        // ================= UI prefs =================
+        private void DrawUiPrefs()
         {
-            var v = value;
-            if (ImGui.Checkbox(label, ref v) && v != value)
+            ImGui.TextUnformatted("Window & Layout");
+            ImGui.Separator();
+
+            BoolCheckbox("Open chat on login", _cfg.StartOpen, v => _cfg.StartOpen = v);
+            FloatSlider("Window Opacity", _cfg.WindowOpacity, 0.3f, 1.0f, v => _cfg.WindowOpacity = v);
+            BoolCheckbox("ASCII-safe output", _cfg.AsciiSafe, v => _cfg.AsciiSafe = v);
+            BoolCheckbox("Two-pane chat", _cfg.TwoPaneMode, v => _cfg.TwoPaneMode = v);
+            BoolCheckbox("Show copy buttons", _cfg.ShowCopyButtons, v => _cfg.ShowCopyButtons = v);
+            FloatSlider("Font Scale", _cfg.FontScale, 0.8f, 1.6f, v => _cfg.FontScale = v);
+            BoolCheckbox("Lock window position", _cfg.LockWindow, v => _cfg.LockWindow = v);
+        }
+
+        // ================= Environment =================
+        private void DrawEnvironment()
+        {
+            ImGui.TextUnformatted("Environment Awareness");
+            ImGui.Separator();
+
             {
-                setter(v);
-                C.Save();
+                bool enabled = _cfg.EnvironmentEnabled;
+                if (ImGui.Checkbox("Enable", ref enabled))
+                { _cfg.EnvironmentEnabled = enabled; _cfg.Save(); }
             }
+
+            {
+                int tick = (int)_cfg.EnvTickSeconds;
+                if (ImGui.SliderInt("Tick (sec)", ref tick, 1, 10))
+                { _cfg.EnvTickSeconds = tick; _cfg.Save(); }
+            }
+
+            BoolCheckbox("Announce zone/duty changes", _cfg.EnvAnnounceOnChange, v => _cfg.EnvAnnounceOnChange = v);
+
+            ImGui.Separator();
+
+            BoolCheckbox("Include Zone", _cfg.EnvIncludeZone, v => _cfg.EnvIncludeZone = v);
+            BoolCheckbox("Include Time", _cfg.EnvIncludeTime, v => _cfg.EnvIncludeTime = v);
+            BoolCheckbox("Include Duty/Combat", _cfg.EnvIncludeDuty, v => _cfg.EnvIncludeDuty = v);
+            BoolCheckbox("Include Coords", _cfg.EnvIncludeCoords, v => _cfg.EnvIncludeCoords = v);
+        }
+
+        // ================= Debug =================
+        private void DrawDebug()
+        {
+            ImGui.TextUnformatted("Debug");
+            ImGui.Separator();
+
+            BoolCheckbox("Mirror listener to window", _cfg.DebugMirrorToWindow, v => _cfg.DebugMirrorToWindow = v);
+            BoolCheckbox("Debug listen log", _cfg.DebugListen, v => _cfg.DebugListen = v);
+        }
+
+        // ================= Helpers (non-generic, ref-string, int maxLen) =================
+
+        private static bool InputTextRef(string label, string current, out string result, int max = 512)
+        {
+            var buf = current ?? string.Empty;
+            var changed = ImGui.InputText(label, ref buf, max, ImGuiInputTextFlags.None);
+            result = buf ?? string.Empty;
+            return changed;
+        }
+
+        private static bool InputTextMultilineRef(string label, string current, int lines, out string result, int max = 4096)
+        {
+            var buf = current ?? string.Empty;
+            var size = new Vector2(-1f, lines * ImGui.GetTextLineHeightWithSpacing() + 8f);
+            var changed = ImGui.InputTextMultiline(label, ref buf, max, size, ImGuiInputTextFlags.None);
+            result = buf ?? string.Empty;
+            return changed;
+        }
+
+        private void BoolCheckbox(string label, bool current, System.Action<bool> setter)
+        {
+            var v = current;
+            if (ImGui.Checkbox(label, ref v)) { setter(v); _cfg.Save(); }
+        }
+
+        private void IntSlider(string label, int current, int min, int max, System.Action<int> setter)
+        {
+            int v = current;
+            if (ImGui.SliderInt(label, ref v, min, max)) { setter(v); _cfg.Save(); }
+        }
+
+        private void FloatSlider(string label, float current, float min, float max, System.Action<float> setter)
+        {
+            float v = current;
+            if (ImGui.SliderFloat(label, ref v, min, max)) { setter(v); _cfg.Save(); }
         }
     }
 }
