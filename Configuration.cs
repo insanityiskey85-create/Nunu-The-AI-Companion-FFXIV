@@ -5,9 +5,9 @@ using Dalamud.Plugin;
 
 namespace NunuTheAICompanion;
 
-public sealed class Configuration : Dalamud.Configuration.IPluginConfiguration
+public sealed partial class Configuration : Dalamud.Configuration.IPluginConfiguration
 {
-    public int Version { get; set; } = 7;
+    public int Version { get; set; } = 8;
 
     // -------- Backend --------
     public string BackendMode { get; set; } = "ollama";
@@ -18,7 +18,6 @@ public sealed class Configuration : Dalamud.Configuration.IPluginConfiguration
         "You are Little Nunu, the Soul Weeper. Stay in FFXIV voice; be helpful and kind. When your emotional tone shifts, you may include a short inline marker like (emotion: happy) or [emotion: mournful].";
     public string ChatDisplayName { get; set; } = "You";
 
-    // Compat endpoints for other services
     public string ChatEndpointUrl { get; set; } = "http://127.0.0.1:11434/api/chat";
     public string EmbeddingEndpointUrl { get; set; } = "http://127.0.0.1:11434/api/embeddings";
 
@@ -42,8 +41,8 @@ public sealed class Configuration : Dalamud.Configuration.IPluginConfiguration
     // -------- Voice --------
     public bool VoiceSpeakEnabled { get; set; } = false;
     public string? VoiceName { get; set; }
-    public int VoiceRate { get; set; } = 0;     // -10..10
-    public int VoiceVolume { get; set; } = 100; // 0..100
+    public int VoiceRate { get; set; } = 0;
+    public int VoiceVolume { get; set; } = 100;
     public bool VoiceOnlyWhenWindowFocused { get; set; } = false;
 
     // -------- Listen --------
@@ -88,10 +87,36 @@ public sealed class Configuration : Dalamud.Configuration.IPluginConfiguration
     public string EmotionDefault { get; set; } = "Neutral";
     public bool EmotionLock { get; set; } = false;
 
-    // -------- Dreaming Mode (NEW) --------
+    // -------- Dreaming Mode --------
     public bool DreamingEnabled { get; set; } = true;
-    public int DreamingIdleMinutes { get; set; } = 10;     // idle threshold
-    public bool DreamingShowInChat { get; set; } = true;   // echo dream into chat window
+    public int DreamingIdleMinutes { get; set; } = 10;
+    public bool DreamingShowInChat { get; set; } = true;
+
+    // -------- Affinity System (NEW) --------
+    public bool AffinityEnabled { get; set; } = true;
+    public bool AffinityAutoClassify { get; set; } = true;
+    public float AffinityPerInteraction { get; set; } = 0.25f;
+    public float AffinityPerAssistantReply { get; set; } = 0.05f;
+    public float AffinityPositiveWeight { get; set; } = 0.6f;
+    public float AffinityNegativeWeight { get; set; } = 0.8f;
+    public float AffinityDecayPerDay { get; set; } = 0.5f;
+
+    // Emotion coupling
+    public bool AffinityEmotionAdjust { get; set; } = true;
+    public float AffinityEmotionHappy { get; set; } = +0.15f;
+    public float AffinityEmotionPlayful { get; set; } = +0.10f;
+    public float AffinityEmotionCurious { get; set; } = +0.08f;
+    public float AffinityEmotionMournful { get; set; } = +0.04f;
+    public float AffinityEmotionSad { get; set; } = -0.06f;
+    public float AffinityEmotionAngry { get; set; } = -0.12f;
+    public float AffinityEmotionTired { get; set; } = -0.02f;
+
+    // Tier thresholds
+    public float AffinityTierAcquaintance { get; set; } = 10f;
+    public float AffinityTierFriend { get; set; } = 30f;
+    public float AffinityTierConfidant { get; set; } = 60f;
+    public float AffinityTierBonded { get; set; } = 100f;
+    public float AffinityTierEternal { get; set; } = 200f;
 
     // -------- UI --------
     public bool StartOpen { get; set; } = true;

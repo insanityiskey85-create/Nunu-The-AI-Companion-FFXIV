@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Net.Http;
@@ -21,7 +21,7 @@ namespace NunuTheAICompanion
 {
     public sealed partial class PluginMain : IDalamudPlugin
     {
-        public string Name => "Nunu The AI Companion";
+        public string Name => "NunuTheAICompanion";
 
         // ===== Dalamud services =====
         [PluginService] internal static IDalamudPluginInterface PluginInterface { get; private set; } = null!;
@@ -83,11 +83,20 @@ namespace NunuTheAICompanion
         private System.Threading.Timer? _dreamTimer;
         private DateTime _lastUserInteractionUtc = DateTime.UtcNow;
 
+        // ===== Affinity =====
+        private AffinityService? _affinity;
+
+        // ===== Personality =====
+        private PersonalityService? _persona;
+
+        // ===== Aliases map =====
+        private static readonly Dictionary<string, string> _aliases = CreateAliases();
+
         public PluginMain()
         {
             Instance = this;
 
-            // No timeout; we cancel via CTS while streaming.
+            // No timeout—streaming cancels via CTS.
             _http.Timeout = Timeout.InfiniteTimeSpan;
 
             // ---- Config
@@ -107,6 +116,12 @@ namespace NunuTheAICompanion
             // ---- Voice (optional)
             try { Voice = new VoiceService(Config, Log); } catch (Exception ex) { Log.Error(ex, "[Voice] init failed"); }
 
+            // ---- Affinity
+            InitializeAffinity(storageRoot);
+
+            // ---- Personality
+            _persona = new PersonalityService(Config, Log);
+
             // ---- Windows
             ChatWindow = new ChatWindow(Config);
             ChatWindow.OnSend += HandleUserSend;
@@ -120,7 +135,7 @@ namespace NunuTheAICompanion
                 MemoryWindow = new MemoryWindow(Config, Memory, Log);
                 WindowSystem.AddWindow(MemoryWindow);
             }
-            catch { /* optional window differences are fine */ }
+            catch { /* optional window */ }
 
             // ---- UiBuilder hooks
             if (!_uiHooksBound)
@@ -170,7 +185,7 @@ namespace NunuTheAICompanion
             InitializeDreaming();
 
             // ---- Greeting
-            ChatWindow.AppendAssistant("Nunu is awake. Ask me anything�or play me a memory.");
+            ChatWindow.AppendAssistant("Nunu is awake. Ask me anything—or play me a memory.");
         }
 
         public void Dispose()
@@ -178,8 +193,8 @@ namespace NunuTheAICompanion
             try { _listener?.Dispose(); } catch { }
             try { _broadcaster?.Dispose(); } catch { }
             try { _ipcRelay?.Dispose(); } catch { }
-            try { Voice?.Dispose(); } catch { }
-            try { _dreamTimer?.Dispose(); } catch { }
+            try { (_dreamTimer as IDisposable)?.Dispose(); } catch { }
+            try { (Voice as IDisposable)?.Dispose(); } catch { } // tolerate if not IDisposable
 
             try
             {
@@ -197,12 +212,16 @@ namespace NunuTheAICompanion
             try { WindowSystem.RemoveAllWindows(); } catch { }
 
             try { Memory.Flush(); } catch { }
+            try { _affinity?.Save(); } catch { }
         }
 
         // ===== UiBuilder handlers =====
         private void DrawUi()
         {
-            // Emotion decay (neutral drift on idle)
+            _affinity?.DecayTick();
+            _persona?.DecayTick();
+
+            // Emotion decay (drift to Neutral)
             if (Config.EmotionEnabled && Config.EmotionDecaySeconds > 0 && !_emotions.Locked)
             {
                 var idle = (DateTime.UtcNow - _lastEmotionChangeUtc).TotalSeconds;
@@ -219,7 +238,7 @@ namespace NunuTheAICompanion
         // ===== Command handler =====
         private void OnCommand(string cmd, string args) => HandleSlashCommand(args ?? string.Empty);
 
-        // ===== Listener boot / rehook =====
+        // ========================= Listener boot / rehook =========================
         public void RehookListener()
         {
             try { _listener?.Dispose(); } catch { }
@@ -234,7 +253,7 @@ namespace NunuTheAICompanion
             Log.Info("[Listener] rehooked with latest configuration.");
         }
 
-        // ===== Soul Threads =====
+        // ========================= Soul Threads =========================
         private void InitializeSoulThreads(HttpClient http, IPluginLog log)
         {
             try
@@ -264,6 +283,7 @@ namespace NunuTheAICompanion
         private void OnUserUtterance(string author, string text, CancellationToken token)
         {
             _lastUserInteractionUtc = DateTime.UtcNow; // dreaming idle reset
+            _affinity?.OnUserUtterance(text);
 
             if (_threads is null) { Memory.Append("user", text, topic: author); return; }
             _threads.AppendAndThread("user", text, author, token);
@@ -272,12 +292,13 @@ namespace NunuTheAICompanion
         private void OnAssistantReply(string author, string reply, CancellationToken token)
         {
             _lastUserInteractionUtc = DateTime.UtcNow; // dreaming idle reset
+            _affinity?.OnAssistantReply(reply);
 
             if (_threads is null) { Memory.Append("assistant", reply, topic: author); return; }
             _threads.AppendAndThread("assistant", reply, author, token);
         }
 
-        // ===== Songcraft =====
+        // ========================= Songcraft =========================
         private void InitializeSongcraft(IPluginLog log)
         {
             _songLog = log;
@@ -309,11 +330,15 @@ namespace NunuTheAICompanion
             }
         }
 
+        // ===== Bard-Call (/song … in chat text) =====
         public bool TryHandleBardCall(string author, string text)
         {
             if (!Config.SongcraftEnabled || _songcraft is null) return false;
 
-            var trig = string.IsNullOrWhiteSpace(Config.SongcraftBardCallTrigger) ? "/song" : Config.SongcraftBardCallTrigger!;
+            var trig = string.IsNullOrWhiteSpace(Config.SongcraftBardCallTrigger)
+                ? "/song"
+                : Config.SongcraftBardCallTrigger!;
+
             var idx = text.IndexOf(trig, StringComparison.OrdinalIgnoreCase);
             if (idx < 0) return false;
 
@@ -361,7 +386,7 @@ namespace NunuTheAICompanion
             return true;
         }
 
-        // ===== Emotion Engine wiring =====
+        // ========================= Emotion Engine =========================
         private void InitializeEmotionEngine()
         {
             if (!Config.EmotionEnabled) return;
@@ -380,6 +405,12 @@ namespace NunuTheAICompanion
                 // Voice tone
                 try { Voice?.ApplyEmotionPreset(emo); } catch { }
 
+                // Affinity coupling
+                try { _affinity?.OnEmotionChanged(emo); } catch { }
+
+                // Personality coupling
+                try { _persona?.OnEmotion(emo); } catch { }
+
                 // Emote line (optional)
                 if (Config.EmotionEmitEmote && _broadcaster?.Enabled == true)
                 {
@@ -395,7 +426,6 @@ namespace NunuTheAICompanion
 
         private static Vector4 ColorFor(NunuEmotion emo)
         {
-            // soft UI tints
             switch (emo)
             {
                 case NunuEmotion.Happy: return new Vector4(0.98f, 0.90f, 0.65f, 1f);
@@ -415,7 +445,7 @@ namespace NunuTheAICompanion
             try { _emotions.Set(emo); Log.Debug($"[Emotion] -> {emo} ({reason})"); } catch { }
         }
 
-        // ===== Dreaming Mode =====
+        // ========================= Dreaming Mode =========================
         private void InitializeDreaming()
         {
             try { _dreamTimer?.Dispose(); } catch { }
@@ -425,7 +455,6 @@ namespace NunuTheAICompanion
                 return;
             }
 
-            // check every minute
             _dreamTimer = new System.Threading.Timer(CheckDreamCycle, null,
                 dueTime: TimeSpan.FromMinutes(1),
                 period: TimeSpan.FromMinutes(1));
@@ -441,7 +470,6 @@ namespace NunuTheAICompanion
                 var idleMins = (DateTime.UtcNow - _lastUserInteractionUtc).TotalMinutes;
                 if (idleMins < Config.DreamingIdleMinutes) return;
 
-                // fire-and-forget dream task
                 _ = Task.Run(async () =>
                 {
                     try
@@ -460,7 +488,6 @@ namespace NunuTheAICompanion
                     }
                     finally
                     {
-                        // reset idle so we don't immediately dream again
                         _lastUserInteractionUtc = DateTime.UtcNow;
                     }
                 });
@@ -473,24 +500,22 @@ namespace NunuTheAICompanion
 
         private async Task<string> ComposeDreamAsync()
         {
-            // Build seeds from recent context (role-tagged)
             var recent = Memory.GetRecentForContext(Math.Max(4, Config.ThreadContextMaxRecent));
             var lines = new List<string>();
             foreach (var (role, content) in recent)
             {
                 if (string.IsNullOrWhiteSpace(content)) continue;
-                // Keep short, avoid blowing up prompt
-                var trimmed = content.Length > 200 ? content.Substring(0, 200) + "�" : content;
+                var trimmed = content.Length > 200 ? content.Substring(0, 200) + "…" : content;
                 lines.Add($"{role}: {trimmed}");
                 if (lines.Count >= 6) break;
             }
 
             var mood = _emotions.Current.ToString();
 
-            var sys = "You are Little Nunu, the Soul Weeper�a void-touched bard of Eorzea. " +
+            var sys = "You are Little Nunu, the Soul Weeper—a void-touched bard of Eorzea. " +
                       "You are dreaming while the player is idle. " +
-                      "Write 1�2 short poetic lines (no more than 180 characters total), reflective and metaphorical, inspired by the seeds. " +
-                      "Do not include code fences or markdown. Keep it diegetic to FFXIV.";
+                      "Write 1–2 short poetic lines (<=180 chars total), reflective and metaphorical, inspired by the seeds. " +
+                      "No code fences or markdown. Keep it diegetic to FFXIV.";
 
             var user = $"Emotion: {mood}\nSeeds:\n- " + string.Join("\n- ", lines) +
                        "\nDream now in one or two short lines.";
@@ -503,7 +528,6 @@ namespace NunuTheAICompanion
 
             var client = new OllamaClient(_http, Config);
 
-            // aggregate via streaming API (so we don't add new client method)
             string dream = "";
             await foreach (var raw in client.StreamChatAsync(Config.BackendUrl, chat, CancellationToken.None))
             {
@@ -511,23 +535,22 @@ namespace NunuTheAICompanion
                     dream += raw;
             }
 
-            // Trim emotion markers if the model added any
             if (!string.IsNullOrWhiteSpace(dream))
             {
                 dream = EmotionMarker.Replace(dream, "");
                 dream = dream.Trim();
-                // Be safe: keep very short
                 if (dream.Length > 240) dream = dream.Substring(0, 240);
             }
 
             return dream ?? "";
         }
 
-        // ===== Inbound path =====
+        // ========================= Inbound path =========================
         private void OnHeardFromChat(string author, string text)
         {
             _lastUserInteractionUtc = DateTime.UtcNow; // dreaming idle reset
 
+            // Bard-Call short-circuit before LLM
             if (TryHandleBardCall(author, text))
                 return;
 
@@ -558,7 +581,7 @@ namespace NunuTheAICompanion
             _ = StreamAssistantAsync(request);
         }
 
-        // ===== Streaming model loop =====
+        // ========================= Streaming model loop =========================
         private async Task StreamAssistantAsync(List<(string role, string content)> history)
         {
             if (_isStreaming) return;
@@ -569,6 +592,10 @@ namespace NunuTheAICompanion
             try
             {
                 var chat = new List<(string role, string content)>(history);
+
+                // Personality guidance
+                if (_persona is not null)
+                    chat.Insert(0, ("system", _persona.BuildSystemLine()));
 
                 // Emotion context + marker guidance
                 if (Config.EmotionEnabled)
@@ -613,7 +640,6 @@ namespace NunuTheAICompanion
                     ChatWindow.AppendAssistantDelta(visibleChunk); // stream deltas to UI
                 }
 
-                // final sweep
                 if (Config.EmotionEnabled && Config.EmotionPromptMarkersEnabled && !string.IsNullOrEmpty(reply))
                     reply = EmotionMarker.Replace(reply, "");
 
@@ -621,25 +647,21 @@ namespace NunuTheAICompanion
 
                 if (!string.IsNullOrEmpty(reply))
                 {
-                    // Persist assistant line (threaded if available)
                     try { OnAssistantReply("Nunu", reply, CancellationToken.None); }
                     catch { if (Memory.Enabled) Memory.Append("assistant", reply, topic: "chat"); }
 
-                    // TTS
                     try { Voice?.Speak(reply); } catch { }
 
-                    // Broadcast to chat
                     if (_broadcaster?.Enabled == true)
                         _broadcaster.Enqueue(_echoChannel, reply);
 
-                    // Optional: Songcraft composition (fire-and-forget)
                     try
                     {
                         var path = TriggerSongcraft(reply, mood: null);
                         if (!string.IsNullOrEmpty(path))
                             ChatWindow.AppendAssistant($"[song] Saved: {path}");
                     }
-                    catch { /* non-fatal */ }
+                    catch { }
                 }
             }
             catch (Exception ex)
@@ -650,14 +672,14 @@ namespace NunuTheAICompanion
             }
             finally
             {
-                StopTypingIndicator(); // always stop
+                StopTypingIndicator();
                 _isStreaming = false;
-                _lastUserInteractionUtc = DateTime.UtcNow; // dreaming idle reset after assistant speaks
+                _lastUserInteractionUtc = DateTime.UtcNow;
                 try { cts.Dispose(); } catch { }
             }
         }
 
-        // ===== Typing Indicator =====
+        // ========================= Typing Indicator =========================
         private void StartTypingIndicator()
         {
             if (_typingActive) return;
@@ -683,132 +705,51 @@ namespace NunuTheAICompanion
             if (_broadcaster == null || !_broadcaster.Enabled) return;
 
             var done = string.IsNullOrWhiteSpace(Config.TypingIndicatorDoneMessage)
-                ? "�done."
+                ? "…done."
                 : Config.TypingIndicatorDoneMessage;
 
             _broadcaster.Enqueue(_echoChannel, done);
         }
 
-        // ========================= Slash Command Router =========================
-
-        private static readonly Dictionary<string, string> _aliases = CreateAliases();
-
-        private static Dictionary<string, string> CreateAliases()
+        // ========================= Affinity =========================
+        private void InitializeAffinity(string storageRoot)
         {
-            var d = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-
-            // Backend
-            d.Add("mode", nameof(Configuration.BackendMode));
-            d.Add("endpoint", nameof(Configuration.BackendUrl));
-            d.Add("url", nameof(Configuration.BackendUrl));
-            d.Add("model", nameof(Configuration.ModelName));
-            d.Add("temp", nameof(Configuration.Temperature));
-            d.Add("system", nameof(Configuration.SystemPrompt));
-
-            // Memory / Soul Threads
-            d.Add("context", nameof(Configuration.ContextTurns));
-            d.Add("threads", nameof(Configuration.SoulThreadsEnabled));
-            d.Add("embed", nameof(Configuration.EmbeddingModel));
-            d.Add("thread.threshold", nameof(Configuration.ThreadSimilarityThreshold));
-            d.Add("thread.max", nameof(Configuration.ThreadContextMaxFromThread));
-            d.Add("recent.max", nameof(Configuration.ThreadContextMaxRecent));
-
-            // Songcraft
-            d.Add("song", nameof(Configuration.SongcraftEnabled));
-            d.Add("song.key", nameof(Configuration.SongcraftKey));
-            d.Add("song.tempo", nameof(Configuration.SongcraftTempoBpm));
-            d.Add("song.bars", nameof(Configuration.SongcraftBars));
-            d.Add("song.program", nameof(Configuration.SongcraftProgram));
-            d.Add("song.dir", nameof(Configuration.SongcraftSaveDir));
-            d.Add("song.trigger", nameof(Configuration.SongcraftBardCallTrigger));
-
-            // Voice
-            d.Add("voice", nameof(Configuration.VoiceSpeakEnabled));
-            d.Add("voice.name", nameof(Configuration.VoiceName));
-            d.Add("voice.rate", nameof(Configuration.VoiceRate));
-            d.Add("voice.vol", nameof(Configuration.VoiceVolume));
-            d.Add("voice.focus", nameof(Configuration.VoiceOnlyWhenWindowFocused));
-
-            // Listen
-            d.Add("listen", nameof(Configuration.ListenEnabled));
-            d.Add("listen.self", nameof(Configuration.ListenSelf));
-            d.Add("listen.say", nameof(Configuration.ListenSay));
-            d.Add("listen.tell", nameof(Configuration.ListenTell));
-            d.Add("listen.party", nameof(Configuration.ListenParty));
-            d.Add("listen.alliance", nameof(Configuration.ListenAlliance));
-            d.Add("listen.fc", nameof(Configuration.ListenFreeCompany));
-            d.Add("listen.shout", nameof(Configuration.ListenShout));
-            d.Add("listen.yell", nameof(Configuration.ListenYell));
-            d.Add("callsign", nameof(Configuration.Callsign));
-            d.Add("require.callsign", nameof(Configuration.RequireCallsign));
-
-            // Broadcast & IPC
-            d.Add("persona", nameof(Configuration.BroadcastAsPersona));
-            d.Add("persona.name", nameof(Configuration.PersonaName));
-            d.Add("ipc.channel", nameof(Configuration.IpcChannelName));
-            d.Add("ipc.prefer", nameof(Configuration.PreferIpcRelay));
-
-            // Echo channel
-            d.Add("echo", nameof(Configuration.EchoChannel));
-
-            // Typing Indicator
-            d.Add("typing", nameof(Configuration.TypingIndicatorEnabled));
-            d.Add("typing.msg", nameof(Configuration.TypingIndicatorMessage));
-            d.Add("typing.done", nameof(Configuration.TypingIndicatorSendDone));
-            d.Add("typing.done.msg", nameof(Configuration.TypingIndicatorDoneMessage));
-
-            // Emotion
-            d.Add("emotion.enabled", nameof(Configuration.EmotionEnabled));
-            d.Add("emotion.emote", nameof(Configuration.EmotionEmitEmote));
-            d.Add("emotion.markers", nameof(Configuration.EmotionPromptMarkersEnabled));
-            d.Add("emotion.decay", nameof(Configuration.EmotionDecaySeconds));
-            d.Add("emotion.default", nameof(Configuration.EmotionDefault));
-            d.Add("emotion.lock", nameof(Configuration.EmotionLock));
-
-            // Dreaming
-            d.Add("dream", nameof(Configuration.DreamingEnabled));
-            d.Add("dream.idle", nameof(Configuration.DreamingIdleMinutes));
-            d.Add("dream.show", nameof(Configuration.DreamingShowInChat));
-
-            // UI
-            d.Add("startopen", nameof(Configuration.StartOpen));
-            d.Add("opacity", nameof(Configuration.WindowOpacity));
-            d.Add("ascii", nameof(Configuration.AsciiSafe));
-            d.Add("twopane", nameof(Configuration.TwoPaneMode));
-            d.Add("copybuttons", nameof(Configuration.ShowCopyButtons));
-            d.Add("fontscale", nameof(Configuration.FontScale));
-            d.Add("lock", nameof(Configuration.LockWindow));
-            d.Add("displayname", nameof(Configuration.ChatDisplayName));
-
-            // Search
-            d.Add("net", nameof(Configuration.AllowInternet));
-            d.Add("search.backend", nameof(Configuration.SearchBackend));
-            d.Add("search.key", nameof(Configuration.SearchApiKey));
-            d.Add("search.max", nameof(Configuration.SearchMaxResults));
-            d.Add("search.timeout", nameof(Configuration.SearchTimeoutSec));
-
-            // Images
-            d.Add("img.backend", nameof(Configuration.ImageBackend));
-            d.Add("img.url", nameof(Configuration.ImageBaseUrl));
-            d.Add("img.model", nameof(Configuration.ImageModel));
-            d.Add("img.steps", nameof(Configuration.ImageSteps));
-            d.Add("img.cfg", nameof(Configuration.ImageGuidance));
-            d.Add("img.w", nameof(Configuration.ImageWidth));
-            d.Add("img.h", nameof(Configuration.ImageHeight));
-            d.Add("img.sampler", nameof(Configuration.ImageSampler));
-            d.Add("img.seed", nameof(Configuration.ImageSeed));
-            d.Add("img.timeout", nameof(Configuration.ImageTimeoutSec));
-            d.Add("img.save", nameof(Configuration.SaveImages));
-            d.Add("img.dir", nameof(Configuration.ImageSaveSubdir));
-
-            // Debug
-            d.Add("debug.listen", nameof(Configuration.DebugListen));
-            d.Add("debug.mirror", nameof(Configuration.DebugMirrorToWindow));
-
-            return d;
+            try
+            {
+                _affinity = new AffinityService(storageRoot, Config, Log);
+                _affinity.OnTierChanged += HandleAffinityTierChanged;
+                Log.Info("[Affinity] initialized.");
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "[Affinity] init failed; continuing without.");
+            }
         }
 
-        // slash usage summary
+        private void HandleAffinityTierChanged(AffinityTier newTier, AffinityTier oldTier, string reason)
+        {
+            var msg = newTier switch
+            {
+                AffinityTier.Acquaintance => "The strings tremble—we are no longer strangers.",
+                AffinityTier.Friend => "A warm counterpoint forms—friendship in harmony.",
+                AffinityTier.Confidant => "Your secrets fall like gentle rain—I will keep them.",
+                AffinityTier.Bonded => "Our melodies entwine—two threads, one song.",
+                AffinityTier.Eternal => "Eclipse Aria awakens—our chorus spans the void.",
+                _ => "A new measure begins."
+            };
+
+            ChatWindow.AddSystemLine($"[Affinity] Tier up → {newTier} (from {oldTier}, reason: {reason})");
+            if (_broadcaster?.Enabled == true)
+                _broadcaster.Enqueue(_echoChannel, $"[Affinity] {msg}");
+
+            if (newTier >= AffinityTier.Friend && !_emotions.Locked)
+                SafeSetEmotion(NunuEmotion.Happy, "tier-up");
+
+            try { _persona?.OnAffinityTier(newTier); } catch { }
+        }
+
+        // ========================= Slash Command Router =========================
+
         private static readonly string _help = string.Join("\n", new[]
         {
             "Usage:",
@@ -832,6 +773,16 @@ namespace NunuTheAICompanion
             "/nunu dream idle <minutes>              -> set idle minutes before dreaming",
             "/nunu dream show <true|false>           -> echo dreams into chat window",
             "/nunu dream now                         -> force a dream once",
+            "/nunu affinity                          -> show score, tier, streak",
+            "/nunu affinity set <score>              -> set score directly",
+            "/nunu affinity add <delta>              -> add to score",
+            "/nunu affinity reset                    -> reset all stats",
+            "/nunu persona                           -> show persona state",
+            "/nunu persona auto <true|false>",
+            "/nunu persona decay <float/day>",
+            "/nunu persona set <w|c|f|p|g> <val>",
+            "/nunu persona base <w0|c0|f0|p0|g0> <val>",
+            "/nunu persona reset",
         });
 
         private void HandleSlashCommand(string raw)
@@ -839,7 +790,6 @@ namespace NunuTheAICompanion
             var args = (raw ?? string.Empty).Trim();
             if (string.IsNullOrEmpty(args))
             {
-                // default: toggle chat window
                 ChatWindow.IsOpen = !ChatWindow.IsOpen;
                 return;
             }
@@ -853,8 +803,7 @@ namespace NunuTheAICompanion
             {
                 case "help":
                 case "?":
-                    ChatWindow.AppendSystem(_help);
-                    return;
+                    ChatWindow.AppendSystem(_help); return;
 
                 case "open": CmdOpen(parts); return;
                 case "get": CmdGet(parts); return;
@@ -867,6 +816,8 @@ namespace NunuTheAICompanion
                 case "song": CmdSong(parts); return;
                 case "emotion": CmdEmotion(parts); return;
                 case "dream": CmdDream(parts); return;
+                case "affinity": CmdAffinity(parts); return;
+                case "persona": CmdPersona(parts); return;
 
                 case "config":
                     ConfigWindow.IsOpen = true; return;
@@ -880,83 +831,7 @@ namespace NunuTheAICompanion
             }
         }
 
-        private void CmdDream(List<string> parts)
-        {
-            if (parts.Count == 1)
-            {
-                ChatWindow.AppendSystem($"Dreaming: {(Config.DreamingEnabled ? "on" : "off")} | idle={Config.DreamingIdleMinutes}m | show={(Config.DreamingShowInChat ? "on" : "off")}");
-                return;
-            }
-
-            var sub = parts[1].ToLowerInvariant();
-
-            if (sub is "on" or "off")
-            {
-                Config.DreamingEnabled = sub == "on";
-                Config.Save();
-                InitializeDreaming();
-                ChatWindow.AppendSystem($"Dreaming {(Config.DreamingEnabled ? "enabled" : "disabled")}.");
-                return;
-            }
-
-            if (sub == "idle")
-            {
-                if (parts.Count < 3) { ChatWindow.AppendSystem("dream idle <minutes>"); return; }
-                if (int.TryParse(parts[2], out var mins) && mins >= 1 && mins <= 240)
-                {
-                    Config.DreamingIdleMinutes = mins;
-                    Config.Save();
-                    ChatWindow.AppendSystem($"Dreaming idle minutes = {mins}");
-                }
-                else ChatWindow.AppendSystem("Please provide minutes between 1 and 240.");
-                return;
-            }
-
-            if (sub == "show")
-            {
-                if (parts.Count < 3) { ChatWindow.AppendSystem("dream show <true|false>"); return; }
-                if (bool.TryParse(parts[2], out var b))
-                {
-                    Config.DreamingShowInChat = b;
-                    Config.Save();
-                    ChatWindow.AppendSystem($"Dreaming show in chat = {b}");
-                }
-                else ChatWindow.AppendSystem("dream show expects true/false");
-                return;
-            }
-
-            if (sub == "now")
-            {
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        var dream = await ComposeDreamAsync();
-                        if (!string.IsNullOrWhiteSpace(dream))
-                        {
-                            Memory.Append("dream", dream.Trim(), topic: "subconscious");
-                            if (Config.DreamingShowInChat)
-                                ChatWindow.AppendAssistant($"[Dream] {dream.Trim()}");
-                            ChatWindow.AppendSystem("[Dreaming] Composed.");
-                        }
-                        else
-                        {
-                            ChatWindow.AppendSystem("[Dreaming] No dream produced.");
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        Log.Warning(ex, "[Dreaming] now failed");
-                        ChatWindow.AppendSystem("[Dreaming] Error (see logs).");
-                    }
-                });
-                return;
-            }
-
-            ChatWindow.AppendSystem("dream | dream on|off | dream idle <minutes> | dream show <true|false> | dream now");
-        }
-
-        // ===== Slash subcommand implementations (existing) =====
+        // --------- Subcommand implementations ---------
 
         private void CmdOpen(List<string> parts)
         {
@@ -1050,7 +925,6 @@ namespace NunuTheAICompanion
                 if (parts.Count < 3) { ChatWindow.AppendSystem("ipc bind <channel>"); return; }
                 var name = parts[2];
 
-                // Recreate relay and bind (dispose is our unbind)
                 try { _ipcRelay?.Dispose(); } catch { }
                 _ipcRelay = new IpcChatRelay(PluginInterface, Log);
 
@@ -1094,7 +968,6 @@ namespace NunuTheAICompanion
 
         private void CmdSong(List<string> parts)
         {
-            // `/nunu song [mood] <lyric...>`
             if (!Config.SongcraftEnabled || _songcraft is null)
             {
                 ChatWindow.AddSystemLine("[Songcraft] disabled.");
@@ -1135,59 +1008,228 @@ namespace NunuTheAICompanion
 
         private void CmdEmotion(List<string> parts)
         {
+            if (!Config.EmotionEnabled) { ChatWindow.AppendSystem("Emotion system disabled."); return; }
+
             if (parts.Count == 1)
             {
-                ChatWindow.AppendSystem($"Emotion: {_emotions.Current} | locked={_emotions.Locked} | emote={(Config.EmotionEmitEmote ? "on" : "off")}");
+                ChatWindow.AppendSystem($"Emotion: current={_emotions.Current}, locked={_emotions.Locked}, emitEmote={Config.EmotionEmitEmote}, markers={Config.EmotionPromptMarkersEnabled}, decay={Config.EmotionDecaySeconds}s");
                 return;
             }
 
             var sub = parts[1].ToLowerInvariant();
-            if (sub == "set")
+
+            if (sub == "set" && parts.Count >= 3)
             {
-                if (parts.Count < 3) { ChatWindow.AppendSystem("emotion set <name>"); return; }
                 var name = parts[2];
                 if (EmotionManager.TryParse(name, out var emo))
                 {
-                    SafeSetEmotion(emo, "slash");
-                    ChatWindow.AppendSystem($"Emotion -> {emo}");
+                    SafeSetEmotion(emo, "manual");
+                    ChatWindow.AppendSystem($"Emotion set -> {emo}");
                 }
-                else ChatWindow.AppendSystem($"Unknown emotion '{name}'.");
+                else ChatWindow.AppendSystem("emotion set <neutral|happy|curious|playful|mournful|sad|angry|tired>");
                 return;
             }
 
-            if (sub == "lock")
+            if (sub == "lock" && parts.Count >= 3 && bool.TryParse(parts[2], out var locked))
             {
-                if (parts.Count < 3) { ChatWindow.AppendSystem("emotion lock <true|false>"); return; }
-                if (bool.TryParse(parts[2], out var b))
-                {
-                    _emotions.SetLocked(b);
-                    Config.EmotionLock = b; Config.Save();
-                    ChatWindow.AppendSystem($"Emotion lock = {b}");
-                }
-                else ChatWindow.AppendSystem("emotion lock expects true/false");
+                _emotions.SetLocked(locked);
+                Config.EmotionLock = locked; Config.Save();
+                ChatWindow.AppendSystem($"Emotion lock = {locked}");
                 return;
             }
 
-            if (sub == "emote")
+            if (sub == "emote" && parts.Count >= 3 && bool.TryParse(parts[2], out var emit))
             {
-                if (parts.Count < 3) { ChatWindow.AppendSystem("emotion emote <true|false>"); return; }
-                if (bool.TryParse(parts[2], out var b))
-                {
-                    Config.EmotionEmitEmote = b; Config.Save();
-                    ChatWindow.AppendSystem($"Emotion emote = {b}");
-                }
-                else ChatWindow.AppendSystem("emotion emote expects true/false");
+                Config.EmotionEmitEmote = emit; Config.Save();
+                ChatWindow.AppendSystem($"Emotion emit emote = {emit}");
                 return;
             }
 
             ChatWindow.AppendSystem("emotion | emotion set <name> | emotion lock <true|false> | emotion emote <true|false>");
         }
 
-        // --- utilities ---
+        private void CmdDream(List<string> parts)
+        {
+            if (parts.Count == 1)
+            {
+                ChatWindow.AppendSystem($"Dreaming: enabled={Config.DreamingEnabled}, idle={Config.DreamingIdleMinutes}m, show={Config.DreamingShowInChat}");
+                return;
+            }
+
+            var sub = parts[1].ToLowerInvariant();
+
+            if (sub is "on" or "off")
+            {
+                Config.DreamingEnabled = sub == "on"; Config.Save();
+                InitializeDreaming();
+                ChatWindow.AppendSystem($"Dreaming = {Config.DreamingEnabled}");
+                return;
+            }
+
+            if (sub == "idle" && parts.Count >= 3 && int.TryParse(parts[2], out var mins))
+            {
+                if (mins < 1) mins = 1;
+                Config.DreamingIdleMinutes = mins; Config.Save();
+                InitializeDreaming();
+                ChatWindow.AppendSystem($"Dreaming idle = {mins} minutes");
+                return;
+            }
+
+            if (sub == "show" && parts.Count >= 3 && bool.TryParse(parts[2], out var show))
+            {
+                Config.DreamingShowInChat = show; Config.Save();
+                ChatWindow.AppendSystem($"Dreaming show-in-chat = {show}");
+                return;
+            }
+
+            if (sub == "now")
+            {
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        var dream = await ComposeDreamAsync();
+                        if (!string.IsNullOrWhiteSpace(dream))
+                        {
+                            Memory.Append("dream", dream.Trim(), topic: "subconscious");
+                            ChatWindow.AppendAssistant($"[Dream] {dream.Trim()}");
+                        }
+                        else ChatWindow.AppendSystem("[Dream] (no output)");
+                    }
+                    catch (Exception ex) { Log.Warning(ex, "[Dream] now failed"); }
+                });
+                return;
+            }
+
+            ChatWindow.AppendSystem("dream | dream on|off | dream idle <minutes> | dream show <true|false> | dream now");
+        }
+
+        private void CmdAffinity(List<string> parts)
+        {
+            if (_affinity is null || !Config.AffinityEnabled)
+            {
+                ChatWindow.AppendSystem("Affinity disabled.");
+                return;
+            }
+
+            if (parts.Count == 1)
+            {
+                var (score, tier, streak) = _affinity.Snapshot();
+                ChatWindow.AppendSystem($"Affinity: score={score:0.##}, tier={tier}, streak={streak}");
+                return;
+            }
+
+            var sub = parts[1].ToLowerInvariant();
+
+            if (sub == "set" && parts.Count >= 3 && float.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out var set))
+            {
+                _affinity.SetScore(set, "manual");
+                var (score, tier, _) = _affinity.Snapshot();
+                ChatWindow.AppendSystem($"Affinity set -> score={score:0.##}, tier={tier}");
+                return;
+            }
+
+            if (sub == "add" && parts.Count >= 3 && float.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out var add))
+            {
+                _affinity.AddScore(add, "manual add");
+                var (score, tier, _) = _affinity.Snapshot();
+                ChatWindow.AppendSystem($"Affinity add -> score={score:0.##}, tier={tier}");
+                return;
+            }
+
+            if (sub == "reset")
+            {
+                _affinity.Reset();
+                ChatWindow.AppendSystem("Affinity reset.");
+                return;
+            }
+
+            ChatWindow.AppendSystem("affinity | affinity set <score> | affinity add <delta> | affinity reset");
+        }
+
+        // --- persona command (adaptive gradients) ---
+        private void CmdPersona(List<string> parts)
+        {
+            if (_persona is null) { ChatWindow.AppendSystem("[Persona] not initialized."); return; }
+
+            if (parts.Count == 1)
+            {
+                ChatWindow.AppendSystem(
+                    $"Persona: auto={(Config.PersonaAutoEnabled ? "on" : "off")} decay={Config.PersonaBaselineDecayPerDay:0.00}\n" +
+                    $"W={_persona.Warmth:0.00} C={_persona.Curiosity:0.00} F={_persona.Formality:0.00} P={_persona.Playfulness:0.00} G={_persona.Gravitas:0.00}\n" +
+                    $"Baseline W={Config.PersonaBaselineWarmth:0.00} C={Config.PersonaBaselineCuriosity:0.00} F={Config.PersonaBaselineFormality:0.00} P={Config.PersonaBaselinePlayfulness:0.00} G={Config.PersonaBaselineGravitas:0.00}");
+                return;
+            }
+
+            var sub = parts[1].ToLowerInvariant();
+            if (sub == "auto" && parts.Count >= 3 && bool.TryParse(parts[2], out var on))
+            {
+                Config.PersonaAutoEnabled = on; Config.Save();
+                ChatWindow.AppendSystem($"persona.auto = {on}");
+                return;
+            }
+
+            if (sub == "decay" && parts.Count >= 3 && float.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out var d))
+            {
+                Config.PersonaBaselineDecayPerDay = MathF.Max(0f, d); Config.Save();
+                ChatWindow.AppendSystem($"persona.decay = {Config.PersonaBaselineDecayPerDay:0.00}");
+                return;
+            }
+
+            if (sub == "set" && parts.Count >= 4)
+            {
+                var which = parts[2].ToLowerInvariant();
+                if (!float.TryParse(parts[3], NumberStyles.Float, CultureInfo.InvariantCulture, out var v))
+                { ChatWindow.AppendSystem("persona set <w|c|f|p|g> <float -1..1>"); return; }
+                v = MathF.Max(-1f, MathF.Min(1f, v));
+                switch (which)
+                {
+                    case "w": _persona.Nudge(PersonalityTrait.Warmth, v - _persona.Warmth, "manual"); break;
+                    case "c": _persona.Nudge(PersonalityTrait.Curiosity, v - _persona.Curiosity, "manual"); break;
+                    case "f": _persona.Nudge(PersonalityTrait.Formality, v - _persona.Formality, "manual"); break;
+                    case "p": _persona.Nudge(PersonalityTrait.Playfulness, v - _persona.Playfulness, "manual"); break;
+                    case "g": _persona.Nudge(PersonalityTrait.Gravitas, v - _persona.Gravitas, "manual"); break;
+                    default: ChatWindow.AppendSystem("persona set <w|c|f|p|g> <float -1..1>"); return;
+                }
+                ChatWindow.AppendSystem($"Persona set {which} -> {v:0.00}");
+                return;
+            }
+
+            if (sub == "base" && parts.Count >= 4)
+            {
+                var which = parts[2].ToLowerInvariant();
+                if (!float.TryParse(parts[3], NumberStyles.Float, CultureInfo.InvariantCulture, out var v))
+                { ChatWindow.AppendSystem("persona base <w0|c0|f0|p0|g0> <float -1..1>"); return; }
+                v = MathF.Max(-1f, MathF.Min(1f, v));
+                switch (which)
+                {
+                    case "w0": Config.PersonaBaselineWarmth = v; break;
+                    case "c0": Config.PersonaBaselineCuriosity = v; break;
+                    case "f0": Config.PersonaBaselineFormality = v; break;
+                    case "p0": Config.PersonaBaselinePlayfulness = v; break;
+                    case "g0": Config.PersonaBaselineGravitas = v; break;
+                    default: ChatWindow.AppendSystem("persona base <w0|c0|f0|p0|g0> <float -1..1>"); return;
+                }
+                Config.Save();
+                ChatWindow.AppendSystem($"Baseline updated: {which} = {v:0.00}");
+                return;
+            }
+
+            if (sub == "reset")
+            {
+                _persona = new PersonalityService(Config, Log);
+                _persona.SaveToConfig();
+                ChatWindow.AppendSystem("Persona reset to baselines.");
+                return;
+            }
+
+            ChatWindow.AppendSystem("persona | persona auto <true|false> | persona decay <float/day> | persona set <w|c|f|p|g> <val> | persona base <w0|c0|f0|p0|g0> <val> | persona reset");
+        }
+
+        // ========================= Utilities =========================
 
         private static List<string> SplitArgs(string s)
         {
-            // simple splitter that respects quotes
             var list = new List<string>();
             if (string.IsNullOrWhiteSpace(s)) return list;
             var i = 0;
@@ -1196,7 +1238,7 @@ namespace NunuTheAICompanion
                 while (i < s.Length && char.IsWhiteSpace(s[i])) i++;
                 if (i >= s.Length) break;
 
-                if (s[i] == '"' || s[i] == '�' || s[i] == '�')
+                if (s[i] == '"' || s[i] == '“' || s[i] == '”')
                 {
                     var q = s[i];
                     i++;
@@ -1220,7 +1262,6 @@ namespace NunuTheAICompanion
             if (_aliases.TryGetValue(input, out var real))
                 return real;
 
-            // allow direct property names (case-insensitive)
             var pi = typeof(Configuration).GetProperty(input,
                 BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
             return pi?.Name;
@@ -1252,7 +1293,6 @@ namespace NunuTheAICompanion
                     { boxed = f; error = ""; return true; }
                     boxed = null; error = "expected float"; return false;
                 }
-                // nullable support
                 var u = Nullable.GetUnderlyingType(target);
                 if (u != null)
                 {
@@ -1262,8 +1302,6 @@ namespace NunuTheAICompanion
                     { boxed = inner; return true; }
                     boxed = null; return false;
                 }
-
-                // last resort
                 boxed = Convert.ChangeType(text, target, CultureInfo.InvariantCulture);
                 error = "";
                 return true;
@@ -1278,7 +1316,6 @@ namespace NunuTheAICompanion
 
         private void ApplySideEffectsOnConfigChange(string key, object? before, object? after)
         {
-            // Listener-affecting keys -> rehook immediately
             if (key.StartsWith("Listen", StringComparison.OrdinalIgnoreCase)
                 || key.Equals(nameof(Configuration.RequireCallsign), StringComparison.OrdinalIgnoreCase)
                 || key.Equals(nameof(Configuration.Callsign), StringComparison.OrdinalIgnoreCase)
@@ -1288,10 +1325,8 @@ namespace NunuTheAICompanion
                 ChatWindow.AppendSystem("[listener] rehooked.");
             }
 
-            // IPC rebind when channel changes
             if (key.Equals(nameof(Configuration.IpcChannelName), StringComparison.OrdinalIgnoreCase))
             {
-                // Recreate relay (acts like unbind+bind)
                 try { _ipcRelay?.Dispose(); } catch { }
                 _ipcRelay = new IpcChatRelay(PluginInterface, Log);
 
@@ -1302,19 +1337,16 @@ namespace NunuTheAICompanion
                     ChatWindow.AppendSystem(ok ? $"[ipc] bound to '{name}'" : $"[ipc] failed to bind '{name}'");
                 }
 
-                // refresh broadcaster preference wiring
                 _broadcaster?.SetIpcRelay(_ipcRelay, Config.PreferIpcRelay);
                 return;
             }
 
-            // IPC prefer toggle
             if (key.Equals(nameof(Configuration.PreferIpcRelay), StringComparison.OrdinalIgnoreCase))
             {
                 _broadcaster?.SetIpcRelay(_ipcRelay, Config.PreferIpcRelay);
                 ChatWindow.AppendSystem($"[ipc] prefer relay = {Config.PreferIpcRelay}");
             }
 
-            // Echo channel
             if (key.Equals(nameof(Configuration.EchoChannel), StringComparison.OrdinalIgnoreCase))
             {
                 _echoChannel = ParseChannel(Config.EchoChannel);
@@ -1322,15 +1354,152 @@ namespace NunuTheAICompanion
                 return;
             }
 
-            // Dreaming toggles
             if (key.StartsWith("Dreaming", StringComparison.OrdinalIgnoreCase))
             {
                 InitializeDreaming();
             }
 
-            // UI niceties
             if (key.Equals(nameof(Configuration.StartOpen), StringComparison.OrdinalIgnoreCase) && after is bool b)
                 ChatWindow.IsOpen = b;
+        }
+
+        // ===== Aliases map =====
+        private static Dictionary<string, string> CreateAliases()
+        {
+            var d = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+            // Backend
+            d.Add("mode", nameof(Configuration.BackendMode));
+            d.Add("endpoint", nameof(Configuration.BackendUrl));
+            d.Add("url", nameof(Configuration.BackendUrl));
+            d.Add("model", nameof(Configuration.ModelName));
+            d.Add("temp", nameof(Configuration.Temperature));
+            d.Add("system", nameof(Configuration.SystemPrompt));
+
+            // Memory / Soul Threads
+            d.Add("context", nameof(Configuration.ContextTurns));
+            d.Add("threads", nameof(Configuration.SoulThreadsEnabled));
+            d.Add("embed", nameof(Configuration.EmbeddingModel));
+            d.Add("thread.threshold", nameof(Configuration.ThreadSimilarityThreshold));
+            d.Add("thread.max", nameof(Configuration.ThreadContextMaxFromThread));
+            d.Add("recent.max", nameof(Configuration.ThreadContextMaxRecent));
+
+            // Songcraft
+            d.Add("song", nameof(Configuration.SongcraftEnabled));
+            d.Add("song.key", nameof(Configuration.SongcraftKey));
+            d.Add("song.tempo", nameof(Configuration.SongcraftTempoBpm));
+            d.Add("song.bars", nameof(Configuration.SongcraftBars));
+            d.Add("song.program", nameof(Configuration.SongcraftProgram));
+            d.Add("song.dir", nameof(Configuration.SongcraftSaveDir));
+            d.Add("song.trigger", nameof(Configuration.SongcraftBardCallTrigger));
+
+            // Voice
+            d.Add("voice", nameof(Configuration.VoiceSpeakEnabled));
+            d.Add("voice.name", nameof(Configuration.VoiceName));
+            d.Add("voice.rate", nameof(Configuration.VoiceRate));
+            d.Add("voice.vol", nameof(Configuration.VoiceVolume));
+            d.Add("voice.focus", nameof(Configuration.VoiceOnlyWhenWindowFocused));
+
+            // Listen
+            d.Add("listen", nameof(Configuration.ListenEnabled));
+            d.Add("listen.self", nameof(Configuration.ListenSelf));
+            d.Add("listen.say", nameof(Configuration.ListenSay));
+            d.Add("listen.tell", nameof(Configuration.ListenTell));
+            d.Add("listen.party", nameof(Configuration.ListenParty));
+            d.Add("listen.alliance", nameof(Configuration.ListenAlliance));
+            d.Add("listen.fc", nameof(Configuration.ListenFreeCompany));
+            d.Add("listen.shout", nameof(Configuration.ListenShout));
+            d.Add("listen.yell", nameof(Configuration.ListenYell));
+            d.Add("callsign", nameof(Configuration.Callsign));
+            d.Add("require.callsign", nameof(Configuration.RequireCallsign));
+
+            // Broadcast & IPC
+            d.Add("persona", nameof(Configuration.BroadcastAsPersona));
+            d.Add("persona.name", nameof(Configuration.PersonaName));
+            d.Add("ipc.channel", nameof(Configuration.IpcChannelName));
+            d.Add("ipc.prefer", nameof(Configuration.PreferIpcRelay));
+
+            // Echo channel
+            d.Add("echo", nameof(Configuration.EchoChannel));
+
+            // Typing Indicator
+            d.Add("typing", nameof(Configuration.TypingIndicatorEnabled));
+            d.Add("typing.msg", nameof(Configuration.TypingIndicatorMessage));
+            d.Add("typing.done", nameof(Configuration.TypingIndicatorSendDone));
+            d.Add("typing.done.msg", nameof(Configuration.TypingIndicatorDoneMessage));
+
+            // Emotion
+            d.Add("emotion.enabled", nameof(Configuration.EmotionEnabled));
+            d.Add("emotion.emote", nameof(Configuration.EmotionEmitEmote));
+            d.Add("emotion.markers", nameof(Configuration.EmotionPromptMarkersEnabled));
+            d.Add("emotion.decay", nameof(Configuration.EmotionDecaySeconds));
+            d.Add("emotion.default", nameof(Configuration.EmotionDefault));
+            d.Add("emotion.lock", nameof(Configuration.EmotionLock));
+
+            // Dreaming
+            d.Add("dream", nameof(Configuration.DreamingEnabled));
+            d.Add("dream.idle", nameof(Configuration.DreamingIdleMinutes));
+            d.Add("dream.show", nameof(Configuration.DreamingShowInChat));
+
+            // Affinity
+            d.Add("affinity", nameof(Configuration.AffinityEnabled));
+            d.Add("bond.decay", nameof(Configuration.AffinityDecayPerDay));
+            d.Add("bond.pos", nameof(Configuration.AffinityPositiveWeight));
+            d.Add("bond.neg", nameof(Configuration.AffinityNegativeWeight));
+            d.Add("bond.auto", nameof(Configuration.AffinityAutoClassify));
+            d.Add("bond.interact", nameof(Configuration.AffinityPerInteraction));
+            d.Add("bond.assist", nameof(Configuration.AffinityPerAssistantReply));
+
+            // Persona (Adaptive Gradients)
+            d.Add("persona.auto", nameof(Configuration.PersonaAutoEnabled));
+            d.Add("persona.decay", nameof(Configuration.PersonaBaselineDecayPerDay));
+            d.Add("persona.w", nameof(Configuration.PersonaWarmth));
+            d.Add("persona.c", nameof(Configuration.PersonaCuriosity));
+            d.Add("persona.f", nameof(Configuration.PersonaFormality));
+            d.Add("persona.p", nameof(Configuration.PersonaPlayfulness));
+            d.Add("persona.g", nameof(Configuration.PersonaGravitas));
+            d.Add("persona.w0", nameof(Configuration.PersonaBaselineWarmth));
+            d.Add("persona.c0", nameof(Configuration.PersonaBaselineCuriosity));
+            d.Add("persona.f0", nameof(Configuration.PersonaBaselineFormality));
+            d.Add("persona.p0", nameof(Configuration.PersonaBaselinePlayfulness));
+            d.Add("persona.g0", nameof(Configuration.PersonaBaselineGravitas));
+
+            // UI
+            d.Add("startopen", nameof(Configuration.StartOpen));
+            d.Add("opacity", nameof(Configuration.WindowOpacity));
+            d.Add("ascii", nameof(Configuration.AsciiSafe));
+            d.Add("twopane", nameof(Configuration.TwoPaneMode));
+            d.Add("copybuttons", nameof(Configuration.ShowCopyButtons));
+            d.Add("fontscale", nameof(Configuration.FontScale));
+            d.Add("lock", nameof(Configuration.LockWindow));
+            d.Add("displayname", nameof(Configuration.ChatDisplayName));
+
+            // Search
+            d.Add("net", nameof(Configuration.AllowInternet));
+            d.Add("search.backend", nameof(Configuration.SearchBackend));
+            d.Add("search.key", nameof(Configuration.SearchApiKey));
+            d.Add("search.max", nameof(Configuration.SearchMaxResults));
+            d.Add("search.timeout", nameof(Configuration.SearchTimeoutSec));
+
+            // Images
+            d.Add("img.backend", nameof(Configuration.ImageBackend));
+            d.Add("img.url", nameof(Configuration.ImageBaseUrl));
+            d.Add("img.model", nameof(Configuration.ImageModel));
+            d.Add("img.steps", nameof(Configuration.ImageSteps));
+            d.Add("img.cfg", nameof(Configuration.ImageGuidance));
+            d.Add("img.w", nameof(Configuration.ImageWidth));
+            d.Add("img.h", nameof(Configuration.ImageHeight));
+            d.Add("img.sampler", nameof(Configuration.ImageSampler));
+            d.Add("img.seed", nameof(Configuration.ImageSeed));
+            d.Add("img.timeout", nameof(Configuration.ImageTimeoutSec));
+            d.Add("img.save", nameof(Configuration.SaveImages));
+            d.Add("img.dir", nameof(Configuration.ImageSaveSubdir));
+
+            // Debug
+            d.Add("debug.listen", nameof(Configuration.DebugListen));
+            d.Add("debug.mirror", nameof(Configuration.DebugMirrorToWindow));
+
+            return d;
         }
 
         // ===== Echo channel =====
@@ -1345,8 +1514,7 @@ namespace NunuTheAICompanion
                 case "party": return ChatBroadcaster.NunuChannel.Party;
                 case "shout": return ChatBroadcaster.NunuChannel.Shout;
                 case "yell": return ChatBroadcaster.NunuChannel.Yell;
-                // Many builds don't expose Alliance; use Party as a stable fallback
-                case "alliance": return ChatBroadcaster.NunuChannel.Party;
+                case "alliance": return ChatBroadcaster.NunuChannel.Party; // stable fallback
                 case "freecompany":
                 case "fc": return ChatBroadcaster.NunuChannel.FreeCompany;
                 case "echo": return ChatBroadcaster.NunuChannel.Echo;

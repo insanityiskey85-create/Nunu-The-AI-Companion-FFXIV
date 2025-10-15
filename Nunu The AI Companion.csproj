@@ -1,47 +1,75 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 	<PropertyGroup>
-		<TargetFramework>net9.0-windows</TargetFramework>
+		<TargetFramework>net7.0-windows</TargetFramework>
+		<UseWindowsForms>false</UseWindowsForms>
 		<Nullable>enable</Nullable>
 		<ImplicitUsings>enable</ImplicitUsings>
-		<EnableWindowsTargeting>true</EnableWindowsTargeting>
-		<UseWPF>false</UseWPF>
-		<UseWindowsForms>false</UseWindowsForms>
+		<LangVersion>latest</LangVersion>
+		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 
-		<!-- CHANGE THIS if your Hooks folder is different (dev/stable/staging). 
-         This folder must contain: Dalamud.dll, Dalamud.Interface.dll, Dalamud.Bindings.ImGui.dll -->
-		<DalamudLibPath Condition="'$(DalamudLibPath)'==''">
-			C:\Users\insan\AppData\Roaming\XIVLauncher\addon\Hooks\dev\
-		</DalamudLibPath>
+		<!-- Plugin packaging metadata (adjust as needed) -->
+		<AssemblyName>Nunu The AI Companion</AssemblyName>
+		<RootNamespace>NunuTheAICompanion</RootNamespace>
+		<Version>1.0.0</Version>
 	</PropertyGroup>
-               <!-- Pulls in System.Speech -->
-	<ItemGroup>
-		<FrameworkReference Include="Microsoft.WindowsDesktop.App" />
-	</ItemGroup>
-	<ItemGroup>
-	  <None Include="api.cs" />
-	  <None Include="Chat.cs" />
-	</ItemGroup>
+
+	<!-- Where Dalamud dev libraries live by default -->
+	<PropertyGroup>
+		<DalamudLibPath>$(AppData)\XIVLauncher\addon\Hooks\dev\</DalamudLibPath>
+	</PropertyGroup>
 	<ItemGroup>
 	  <Compile Remove="api.cs" />
 	  <Compile Remove="Chat.cs" />
 	</ItemGroup>
 	<ItemGroup>
+	  <None Include="api.cs" />
+	  <None Include="Chat.cs" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<!-- Packaging helper -->
+		<PackageReference Include="DalamudPackager" Version="2.1.11" PrivateAssets="All" />
+
+		<!-- Dalamud core -->
 		<Reference Include="Dalamud">
-			<HintPath>$(DalamudLibPath)\Dalamud.dll</HintPath>
+			<HintPath>$(DalamudLibPath)Dalamud.dll</HintPath>
+			<Private>false</Private>
+		</Reference>
+		<Reference Include="Dalamud.Plugin">
+			<HintPath>$(DalamudLibPath)Dalamud.Plugin.dll</HintPath>
 			<Private>false</Private>
 		</Reference>
 		<Reference Include="Dalamud.Interface">
-			<HintPath>$(DalamudLibPath)\Dalamud.Interface.dll</HintPath>
+			<HintPath>$(DalamudLibPath)Dalamud.Interface.dll</HintPath>
 			<Private>false</Private>
 		</Reference>
-		<Reference Include="Dalamud.Bindings.ImGui">
-			<HintPath>$(DalamudLibPath)\Dalamud.Bindings.ImGui.dll</HintPath>
+		<Reference Include="ImGui.NET">
+			<HintPath>$(DalamudLibPath)ImGui.NET.dll</HintPath>
+			<Private>false</Private>
+		</Reference>
+
+		<!-- Excel access (used by EnvironmentService for Territory/Place/Weather) -->
+		<Reference Include="Lumina">
+			<HintPath>$(DalamudLibPath)Lumina.dll</HintPath>
+			<Private>false</Private>
+		</Reference>
+		<Reference Include="Lumina.Excel">
+			<HintPath>$(DalamudLibPath)Lumina.Excel.dll</HintPath>
+			<Private>false</Private>
+		</Reference>
+		<Reference Include="Lumina.Excel.GeneratedSheets">
+			<HintPath>$(DalamudLibPath)Lumina.Excel.GeneratedSheets.dll</HintPath>
 			<Private>false</Private>
 		</Reference>
 	</ItemGroup>
 
-	<!-- Let SDK include all .cs by default; remove any custom <Compile Include=...> duplicates -->
+	<!-- Do NOT manually list Compile items to avoid NETSDK1022 -->
 	<PropertyGroup>
 		<EnableDefaultCompileItems>true</EnableDefaultCompileItems>
 	</PropertyGroup>
+
+	<!-- Package to devPlugins on build -->
+	<Target Name="PostBuild" AfterTargets="Build">
+		<DalamudPackager ProjectDir="$(ProjectDir)" OutputPath="$(OutputPath)" />
+	</Target>
 </Project>
