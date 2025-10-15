@@ -1,7 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Numerics;
-using System.Text;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
 
@@ -11,315 +11,305 @@ namespace NunuTheAICompanion.UI
     {
         private readonly Configuration _cfg;
 
-        private enum LineKind { User, Assistant, System }
-        private readonly List<(LineKind kind, string text)> _left = new();
-        private readonly List<(LineKind kind, string text)> _right = new();
+        // Chat buffers
+        private readonly List<string> _you = new();
+        private readonly List<string> _nunu = new();
         private readonly List<string> _system = new();
 
+        // Streaming state
+        private bool _isStreaming;
+        private string _streamBuf = string.Empty;
+
+        // Input
         private string _input = string.Empty;
-        private bool _focusInputNext = false;
-
-        private bool _isStreaming = false;
-        private readonly StringBuilder _streamBuf = new();
-        private readonly float _panePad = 8f;
-
-        private bool _scrollLeftToEnd = false;
-        private bool _scrollRightToEnd = false;
-
-        // Luminous magenta palette
-        private readonly Vector4 _magenta = new(1.00f, 0.20f, 0.90f, 1.00f);
-        private readonly Vector4 _magentaDim = new(0.90f, 0.35f, 0.85f, 1.00f);
-        private readonly Vector4 _assistantText = new(0.96f, 0.88f, 0.98f, 1.00f);
-        private readonly Vector4 _userText = new(0.95f, 0.95f, 0.95f, 1.00f);
-        private readonly Vector4 _systemText = new(0.95f, 0.80f, 0.98f, 1.00f);
 
         public event Action<string>? OnSend;
 
         public ChatWindow(Configuration cfg)
-            : base("Little Nunu — Soul-Weeper Chat", ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoCollapse)
+            : base("Little Nunu — Soul-Weeper Chat", ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoScrollbar)
         {
             _cfg = cfg;
+
+            Size = new Vector2(920, 560);
+            SizeCondition = ImGuiCond.FirstUseEver;
+
+            // prevent resizing into oblivion
             SizeConstraints = new WindowSizeConstraints
             {
-                MinimumSize = new Vector2(680, 460),
-                MaximumSize = new Vector2(9999, 9999)
+                MinimumSize = new Vector2(600, 360),
+                MaximumSize = new Vector2(4096, 4096),
             };
         }
 
-        public override bool DrawConditions()
+        // ===== API used by PluginMain =====
+
+        public void AppendSystem(string text)
         {
-            if (PluginMain.IsShuttingDown) return false; // <<< gate
-
-            ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 12f);
-            ImGui.PushStyleVar(ImGuiStyleVar.FrameRounding, 10f);
-
-            if (_cfg.FontScale > 0f)
-                ImGui.SetWindowFontScale(_cfg.FontScale);
-
-            if (_cfg.WindowOpacity > 0f && _cfg.WindowOpacity < 1f)
-                ImGui.PushStyleVar(ImGuiStyleVar.Alpha, _cfg.WindowOpacity);
-
-            if (_cfg.LockWindow)
-                Flags |= ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoResize;
-            else
-                Flags &= ~(ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoResize);
-
-            return base.DrawConditions();
+            if (string.IsNullOrEmpty(text)) return;
+            foreach (var line in SplitLines(text))
+                _system.Add(line);
         }
 
-        public override void PostDraw()
+        public void AddSystemLine(string line)
         {
-            if (_cfg.WindowOpacity > 0f && _cfg.WindowOpacity < 1f) ImGui.PopStyleVar();
-            ImGui.PopStyleVar();
-            ImGui.PopStyleVar();
+            if (!string.IsNullOrEmpty(line))
+                _system.Add(line);
+        }
+
+        public void AppendAssistant(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return;
+            _nunu.Add(text);
+        }
+
+        public void BeginAssistantStream()
+        {
+            _isStreaming = true;
+            _streamBuf = string.Empty;
+        }
+
+        public void AppendAssistantDelta(string delta)
+        {
+            if (!_isStreaming || string.IsNullOrEmpty(delta)) return;
+            _streamBuf += delta;
+        }
+
+        public void EndAssistantStream()
+        {
+            if (!_isStreaming) return;
+            _isStreaming = false;
+            if (!string.IsNullOrEmpty(_streamBuf))
+                _nunu.Add(_streamBuf);
+            _streamBuf = string.Empty;
+        }
+
+        // ===== Window lifecycle =====
+
+        public override bool DrawConditions()
+        {
+            if (PluginMain.IsShuttingDown) return false;
+            return base.DrawConditions();
         }
 
         public override void Draw()
         {
-            if (PluginMain.IsShuttingDown) return; // extra guard
+            if (PluginMain.IsShuttingDown) return;
 
-            DrawHeader();
-            if (_cfg.TwoPaneMode) DrawTwoPane(); else DrawSinglePane();
+            // Respect UI prefs
+            var alpha = Math.Clamp(_cfg.WindowOpacity, 0.3f, 1.0f);
+            ImGui.PushStyleVar(ImGuiStyleVar.Alpha, alpha);
+
+            var prevScale = ImGui.GetFontSize();
+            ImGui.SetWindowFontScale(Math.Clamp(_cfg.FontScale, 0.8f, 1.8f));
+
+            DrawSystemStrip();
+            ImGui.Separator();
+
+            if (_cfg.TwoPaneMode)
+                DrawTwoPane();
+            else
+                DrawSinglePane();
+
             ImGui.Separator();
             DrawComposer();
+
+            // Footer utilities
+            if (_cfg.ShowCopyButtons)
+            {
+                if (ImGui.Button("Copy last Nunu"))
+                {
+                    var last = _isStreaming ? _streamBuf : _nunu.LastOrDefault() ?? "";
+                    ImGui.SetClipboardText(last);
+                }
+                ImGui.SameLine();
+                if (ImGui.Button("Copy last You"))
+                {
+                    var last = _you.LastOrDefault() ?? "";
+                    ImGui.SetClipboardText(last);
+                }
+            }
+
+            // Restore UI vars
+            ImGui.SetWindowFontScale(1f);
+            ImGui.PopStyleVar();
         }
 
-        private void DrawHeader()
-        {
-            ImGui.PushStyleColor(ImGuiCol.Text, _magenta);
-            ImGui.TextUnformatted("♪ Nunu’s Luminous Thread ♪");
-            ImGui.PopStyleColor();
+        // ===== Sections =====
 
-            if (_system.Count > 0)
+        private void DrawSystemStrip()
+        {
+            // Magenta header area for system lines
+            var avail = ImGui.GetContentRegionAvail();
+            var height = MathF.Min(120f, MathF.Max(24f, avail.Y * 0.25f));
+            if (ImGui.BeginChild("##sys_strip", new Vector2(-1, height), true))
             {
-                ImGui.PushStyleColor(ImGuiCol.Text, _systemText);
-                foreach (var s in _system) ImGui.TextUnformatted($"› {s}");
+                // luminous magenta-ish title
+                ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(1.0f, 0.65f, 0.95f, 1f));
+                ImGui.TextUnformatted("— Nunu System —");
                 ImGui.PopStyleColor();
+
+                ImGui.PushTextWrapPos(0);
+                foreach (var line in _system.TakeLast(200)) // cap to avoid megaspam
+                    ImGui.TextUnformatted(line);
+                if (ImGui.GetScrollY() >= ImGui.GetScrollMaxY() - 4f)
+                    ImGui.SetScrollHereY(1.0f);
+                ImGui.PopTextWrapPos();
             }
-            ImGui.Dummy(new Vector2(0, 2));
+            ImGui.EndChild();
         }
 
         private void DrawTwoPane()
         {
             var avail = ImGui.GetContentRegionAvail();
-            var half = new Vector2(avail.X * 0.5f - _panePad * 0.5f, avail.Y - 120f);
+            float split = MathF.Floor(avail.X * 0.5f) - 6f;
 
-            ImGui.BeginGroup();
-            DrawPaneBox("You", _userText, _left, ref _scrollLeftToEnd, half);
-            ImGui.EndGroup();
+            // Left: You
+            if (ImGui.BeginChild("##you_pane", new Vector2(split, -1), true))
+            {
+                ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(0.7f, 0.7f, 1f, 1f));
+                ImGui.TextUnformatted((_cfg.ChatDisplayName?.Length ?? 0) > 0 ? _cfg.ChatDisplayName! : "You");
+                ImGui.PopStyleColor();
+                ImGui.Separator();
 
-            ImGui.SameLine(0, _panePad);
+                ImGui.PushTextWrapPos(0);
+                foreach (var line in _you.TakeLast(500))
+                    ImGui.TextUnformatted(line);
+                if (ImGui.GetScrollY() >= ImGui.GetScrollMaxY() - 4f)
+                    ImGui.SetScrollHereY(1.0f);
+                ImGui.PopTextWrapPos();
+            }
+            ImGui.EndChild();
 
-            ImGui.BeginGroup();
-            DrawPaneBox("Nunu", _assistantText, _right, ref _scrollRightToEnd, half, isRight: true);
-            ImGui.EndGroup();
+            ImGui.SameLine();
+
+            // Right: Nunu
+            if (ImGui.BeginChild("##nunu_pane", new Vector2(0, -1), true))
+            {
+                ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(1.0f, 0.35f, 0.85f, 1f)); // luminous magenta
+                ImGui.TextUnformatted("Nunu");
+                ImGui.PopStyleColor();
+                ImGui.Separator();
+
+                ImGui.PushTextWrapPos(0);
+                foreach (var line in _nunu.TakeLast(500))
+                    ImGui.TextUnformatted(line);
+
+                if (_isStreaming && !string.IsNullOrEmpty(_streamBuf))
+                {
+                    ImGui.Separator();
+                    ImGui.TextUnformatted(_streamBuf);
+                }
+
+                if (ImGui.GetScrollY() >= ImGui.GetScrollMaxY() - 4f)
+                    ImGui.SetScrollHereY(1.0f);
+                ImGui.PopTextWrapPos();
+            }
+            ImGui.EndChild();
         }
 
         private void DrawSinglePane()
         {
-            var avail = ImGui.GetContentRegionAvail();
-            var size = new Vector2(avail.X, avail.Y - 120f);
-
-            ImGui.PushStyleColor(ImGuiCol.ChildBg, _magentaDim with { W = 0.10f });
-            ImGui.BeginChild("##nunu_single_pane", size, true);
-
-            ImGui.PushStyleColor(ImGuiCol.Text, _userText);
-            foreach (var (kind, text) in _left) if (kind == LineKind.User) RenderBubble("You", text, left: true);
-            ImGui.PopStyleColor();
-
-            ImGui.Separator();
-
-            ImGui.PushStyleColor(ImGuiCol.Text, _assistantText);
-            foreach (var (kind, text) in _right) if (kind == LineKind.Assistant) RenderBubble("Nunu", text, left: false);
-            ImGui.PopStyleColor();
-
-            if (_isStreaming && _streamBuf.Length > 0)
+            if (ImGui.BeginChild("##single_pane", new Vector2(-1, -1), true))
             {
-                ImGui.PushStyleColor(ImGuiCol.Text, _assistantText);
-                RenderBubble("Nunu (typing…)", _streamBuf.ToString(), left: false, streaming: true);
-                ImGui.PopStyleColor();
-            }
+                ImGui.PushTextWrapPos(0);
 
-            if (ImGui.GetScrollY() >= ImGui.GetScrollMaxY() - 2)
-                ImGui.SetScrollHereY();
+                // Show as transcript, tagging speakers
+                int u = Math.Max(0, _you.Count - 500);
+                int n = Math.Max(0, _nunu.Count - 500);
 
-            ImGui.EndChild();
-            ImGui.PopStyleColor();
-        }
-
-        private void DrawPaneBox(string title, Vector4 textColor, List<(LineKind, string)> lines,
-            ref bool scrollEnd, Vector2 size, bool isRight = false)
-        {
-            ImGui.PushStyleColor(ImGuiCol.Text, _magenta);
-            ImGui.TextUnformatted(title);
-            ImGui.PopStyleColor();
-
-            ImGui.PushStyleColor(ImGuiCol.ChildBg, _magentaDim with { W = 0.08f });
-            ImGui.BeginChild($"##pane_{title}", size, true);
-
-            ImGui.PushStyleColor(ImGuiCol.Text, textColor);
-
-            foreach (var (kind, text) in lines)
-            {
-                switch (kind)
+                // Interleave naive (You lines first then Nunu lines); this mode is just a compact dump
+                for (int i = u; i < _you.Count; i++)
                 {
-                    case LineKind.User:
-                        RenderBubble(_cfg.ChatDisplayName?.Length > 0 ? _cfg.ChatDisplayName! : "You", text, left: true);
-                        break;
-                    case LineKind.Assistant:
-                        RenderBubble("Nunu", text, left: false);
-                        break;
-                    case LineKind.System:
-                        ImGui.PushStyleColor(ImGuiCol.Text, _systemText);
-                        RenderSystemLine(text);
-                        ImGui.PopStyleColor();
-                        break;
+                    ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(0.7f, 0.7f, 1f, 1f));
+                    ImGui.TextUnformatted($"You: {_you[i]}");
+                    ImGui.PopStyleColor();
                 }
+                for (int j = n; j < _nunu.Count; j++)
+                {
+                    ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(1.0f, 0.35f, 0.85f, 1f));
+                    ImGui.TextUnformatted($"Nunu: {_nunu[j]}");
+                    ImGui.PopStyleColor();
+                }
+
+                if (_isStreaming && !string.IsNullOrEmpty(_streamBuf))
+                {
+                    ImGui.Separator();
+                    ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(1.0f, 0.35f, 0.85f, 1f));
+                    ImGui.TextUnformatted($"Nunu (typing…): {_streamBuf}");
+                    ImGui.PopStyleColor();
+                }
+
+                if (ImGui.GetScrollY() >= ImGui.GetScrollMaxY() - 4f)
+                    ImGui.SetScrollHereY(1.0f);
+
+                ImGui.PopTextWrapPos();
             }
-
-            if (isRight && _isStreaming && _streamBuf.Length > 0)
-                RenderBubble("Nunu (writing…)", _streamBuf.ToString(), left: false, streaming: true);
-
-            if (scrollEnd || ImGui.GetScrollY() >= ImGui.GetScrollMaxY() - 2)
-            {
-                ImGui.SetScrollHereY(1.0f);
-                scrollEnd = false;
-            }
-
-            ImGui.PopStyleColor();
             ImGui.EndChild();
-            ImGui.PopStyleColor();
         }
 
         private void DrawComposer()
         {
-            var availX = ImGui.GetContentRegionAvail().X;
-
-            if (_focusInputNext)
+            // Big multiline input area + Send button
+            var height = 120f;
+            if (ImGui.InputTextMultiline("##compose", ref _input, 4000, new Vector2(-160, height)))
             {
-                ImGui.SetKeyboardFocusHere();
-                _focusInputNext = false;
+                // just edit
             }
-
-            var inputId = "##nunu_input";
-            var height = 3 * ImGui.GetTextLineHeightWithSpacing() + 6f;
-            ImGui.PushStyleColor(ImGuiCol.FrameBg, _magentaDim with { W = 0.15f });
-            ImGui.InputTextMultiline(inputId, ref _input, 4000, new Vector2(availX - 140f, height), ImGuiInputTextFlags.None);
-            ImGui.PopStyleColor();
-
             ImGui.SameLine();
 
-            ImGui.PushStyleColor(ImGuiCol.Button, _magenta with { W = 0.45f });
-            ImGui.PushStyleColor(ImGuiCol.ButtonHovered, _magenta with { W = 0.65f });
-            ImGui.PushStyleColor(ImGuiCol.ButtonActive, _magenta with { W = 0.85f });
-            if (ImGui.Button("Send", new Vector2(120f, height)))
-                SubmitInput();
-            ImGui.PopStyleColor(3);
-
-            if (ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows))
+            if (ImGui.Button("Send", new Vector2(140, height)))
             {
-                bool ctrl = ImGui.GetIO().KeyCtrl;
-                if (ctrl && ImGui.IsKeyPressed(ImGuiKey.Enter))
-                    SubmitInput();
+                Submit();
             }
 
-            if (_cfg.ShowCopyButtons)
+            // Also send with Ctrl+Enter to avoid conflicting with multiline Enter
+            // (Enter is kept for newlines in multiline)
+            if (ImGui.IsItemFocused() || ImGui.IsItemHovered())
             {
-                ImGui.Dummy(new Vector2(0, 4));
-                if (ImGui.Button("Copy last Nunu"))
-                {
-                    var last = GetLast(LineKind.Assistant);
-                    if (!string.IsNullOrEmpty(last)) ImGui.SetClipboardText(last);
-                }
-                ImGui.SameLine();
-                if (ImGui.Button("Copy last You"))
-                {
-                    var last = GetLast(LineKind.User);
-                    if (!string.IsNullOrEmpty(last)) ImGui.SetClipboardText(last);
-                }
+                // no-op
             }
+
+            // Keyboard shortcut: Ctrl+Enter anywhere
+            bool ctrl = ImGui.GetIO().KeyCtrl;
+            if (ctrl && ImGui.IsKeyPressed(ImGuiKey.Enter))
+                Submit();
         }
 
-        private void SubmitInput()
+        private void Submit()
         {
             var text = (_input ?? string.Empty).Trim();
             if (text.Length == 0) return;
 
-            AddUserLine(text);
-            OnSend?.Invoke(text);
+            _you.Add(text);
+            try { OnSend?.Invoke(text); }
+            catch { /* UI must never throw */ }
 
             _input = string.Empty;
-            _focusInputNext = true;
         }
 
-        private void RenderBubble(string speaker, string text, bool left, bool streaming = false)
+        // ===== helpers =====
+
+        private static IEnumerable<string> SplitLines(string s)
         {
-            ImGui.PushStyleColor(ImGuiCol.Text, _magenta);
-            ImGui.TextUnformatted(speaker);
-            ImGui.PopStyleColor();
+            if (string.IsNullOrEmpty(s)) yield break;
 
-            var wrap = ImGui.GetContentRegionAvail().X;
-            ImGui.PushTextWrapPos(ImGui.GetCursorPosX() + MathF.Max(240f, wrap));
-            var shown = _cfg.AsciiSafe ? AsciiSafe(text) : text;
-
-            var bg = _magentaDim with { W = streaming ? 0.12f : 0.18f };
-            ImGui.PushStyleColor(ImGuiCol.ChildBg, bg);
-            ImGui.BeginChild($"##bubble_{speaker}_{ImGui.GetCursorPosY():0}", new Vector2(0, 0), true);
-            ImGui.TextUnformatted(shown);
-            ImGui.EndChild();
-            ImGui.PopStyleColor();
-
-            ImGui.PopTextWrapPos();
-            ImGui.Dummy(new Vector2(0, 4));
-        }
-
-        private void RenderSystemLine(string text)
-        {
-            ImGui.PushStyleColor(ImGuiCol.Text, _systemText);
-            ImGui.TextUnformatted(text);
-            ImGui.PopStyleColor();
-        }
-
-        private static string AsciiSafe(string s)
-        {
-            var sb = new StringBuilder(s.Length);
-            foreach (var ch in s) sb.Append(ch <= 127 ? ch : '?');
-            return sb.ToString();
-        }
-
-        private string? GetLast(LineKind k)
-        {
-            var list = k == LineKind.Assistant ? _right : _left;
-            for (int i = list.Count - 1; i >= 0; --i)
-                if (list[i].Item1 == k)
-                    return list[i].Item2;
-            return null;
-        }
-
-        // Public API
-        public void AppendSystem(string text)
-        {
-            _system.Add(text);
-            _left.Add((LineKind.System, text));
-            _right.Add((LineKind.System, text));
-            _scrollLeftToEnd = _scrollRightToEnd = true;
-        }
-        public void AddSystemLine(string text) => AppendSystem(text);
-        public void AppendAssistant(string text) { _right.Add((LineKind.Assistant, text)); _scrollRightToEnd = true; }
-        public void BeginAssistantStream() { _isStreaming = true; _streamBuf.Clear(); }
-        public void AppendAssistantDelta(string delta) { if (!_isStreaming) BeginAssistantStream(); _streamBuf.Append(delta); _scrollRightToEnd = true; }
-        public void EndAssistantStream()
-        {
-            if (!_isStreaming) return;
-            _isStreaming = false;
-            var final = _streamBuf.ToString();
-            _streamBuf.Clear();
-            if (!string.IsNullOrEmpty(final))
+            // split CRLF/CR/LF
+            int i = 0;
+            while (i < s.Length)
             {
-                _right.Add((LineKind.Assistant, final));
-                _scrollRightToEnd = true;
+                int j = s.IndexOfAny(new[] { '\r', '\n' }, i);
+                if (j < 0)
+                {
+                    yield return s[i..];
+                    yield break;
+                }
+
+                yield return s[i..j];
+
+                // consume possible CRLF
+                if (j + 1 < s.Length && s[j] == '\r' && s[j + 1] == '\n') i = j + 2;
+                else i = j + 1;
             }
         }
-        public void AddUserLine(string text) { _left.Add((LineKind.User, text)); _scrollLeftToEnd = true; }
     }
 }

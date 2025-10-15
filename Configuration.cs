@@ -12,7 +12,7 @@ public sealed partial class Configuration : Dalamud.Configuration.IPluginConfigu
     // -------- Backend --------
     public string BackendMode { get; set; } = "ollama";
     public string BackendUrl { get; set; } = "http://127.0.0.1:11434";
-    public string ModelName { get; set; } = "nunu";
+    public string ModelName { get; set; } = "nunu-8b";
     public float Temperature { get; set; } = 0.7f;
     public string SystemPrompt { get; set; } =
         "You are Little Nunu, the Soul Weeper. Stay in FFXIV voice; be helpful and kind. When your emotional tone shifts, you may include a short inline marker like (emotion: happy) or [emotion: mournful].";
@@ -47,16 +47,16 @@ public sealed partial class Configuration : Dalamud.Configuration.IPluginConfigu
 
     // -------- Listen --------
     public bool ListenEnabled { get; set; } = true;
-    public bool ListenSelf { get; set; } = false;
+    public bool ListenSelf { get; set; } = true;
     public bool ListenSay { get; set; } = true;
     public bool ListenTell { get; set; } = true;
     public bool ListenParty { get; set; } = true;
     public bool ListenAlliance { get; set; } = false;
-    public bool ListenFreeCompany { get; set; } = false;
+    public bool ListenFreeCompany { get; set; } = true;
     public bool ListenShout { get; set; } = false;
     public bool ListenYell { get; set; } = false;
-    public bool RequireCallsign { get; set; } = false;
-    public string Callsign { get; set; } = "@nunu";
+    public bool RequireCallsign { get; set; } = true;
+    public string Callsign { get; set; } = "@Little Nunu";
 
     // ---- Whitelist ----
     public List<string> Whitelist { get; set; } = new List<string>();
@@ -75,7 +75,7 @@ public sealed partial class Configuration : Dalamud.Configuration.IPluginConfigu
 
     // -------- Typing Indicator --------
     public bool TypingIndicatorEnabled { get; set; } = true;
-    public string TypingIndicatorMessage { get; set; } = "Little Nunu is writing ....";
+    public string TypingIndicatorMessage { get; set; } = "Little Nunu is writing .... Please be Patient WAH!";
     public bool TypingIndicatorSendDone { get; set; } = false;
     public string TypingIndicatorDoneMessage { get; set; } = "…done.";
 
@@ -83,8 +83,8 @@ public sealed partial class Configuration : Dalamud.Configuration.IPluginConfigu
     public bool EmotionEnabled { get; set; } = true;
     public bool EmotionEmitEmote { get; set; } = true;
     public bool EmotionPromptMarkersEnabled { get; set; } = true;
-    public int EmotionDecaySeconds { get; set; } = 120;
-    public string EmotionDefault { get; set; } = "Neutral";
+    public int EmotionDecaySeconds { get; set; } = 1000000;
+    public string EmotionDefault { get; set; } = "Happy";
     public bool EmotionLock { get; set; } = false;
 
     // -------- Dreaming Mode --------
@@ -144,7 +144,7 @@ public sealed partial class Configuration : Dalamud.Configuration.IPluginConfigu
     // -------- Search --------
     public bool AllowInternet { get; set; } = false;
     public string SearchBackend { get; set; } = "serpapi";
-    public string SearchApiKey { get; set; } = "";
+    public string SearchApiKey { get; set; } = "a7913350a7306681a9dc0546e1e9ba2372930f19da59b8b444f96e2a22f77e63";
     public int SearchMaxResults { get; set; } = 5;
     public int SearchTimeoutSec { get; set; } = 20;
 
