@@ -93,12 +93,22 @@ namespace NunuTheAICompanion.UI
             if (InputTextRef("Save Directory", _cfg.SongcraftSaveDir ?? string.Empty, out var dirNext))
             { _cfg.SongcraftSaveDir = dirNext; _cfg.Save(); }
 
-            if (InputTextRef("Default Program", _cfg.SongcraftProgram ?? "piano", out var progNext))
-            { _cfg.SongcraftProgram = progNext; _cfg.Save(); }
+            // Search: numeric sliders must use ints (no ?? "string")
+            int maxResults = _cfg.SearchMaxResults;
+            if (ImGui.SliderInt("Max Results", ref maxResults, 1, 20))
+            {
+                _cfg.SearchMaxResults = maxResults;
+                _cfg.Save();
+            }
 
-            IntSlider("Bars", _cfg.SongcraftBars, 1, 128, v => _cfg.SongcraftBars = v);
-            IntSlider("Tempo (BPM)", _cfg.SongcraftTempoBpm, 40, 240, v => _cfg.SongcraftTempoBpm = v);
+            int timeout = _cfg.SearchTimeoutSec;
+            if (ImGui.SliderInt("Timeout (sec)", ref timeout, 5, 120))
+            {
+                _cfg.SearchTimeoutSec = timeout;
+                _cfg.Save();
+            }
         }
+
 
         // ================= Voice =================
         private void DrawVoice()
@@ -178,7 +188,6 @@ namespace NunuTheAICompanion.UI
             if (InputTextRef("Search API Key", _cfg.SearchApiKey ?? string.Empty, out var keyNext))
             { _cfg.SearchApiKey = keyNext; _cfg.Save(); }
 
-            // No ?? "string" — use an int buffer and assign back.
             int maxResults = _cfg.SearchMaxResults;
             if (ImGui.SliderInt("Max Results", ref maxResults, 1, 20))
             { _cfg.SearchMaxResults = maxResults; _cfg.Save(); }
@@ -187,7 +196,6 @@ namespace NunuTheAICompanion.UI
             if (ImGui.SliderInt("Timeout (sec)", ref timeout, 5, 120))
             { _cfg.SearchTimeoutSec = timeout; _cfg.Save(); }
         }
-
 
         // ================= Images =================
         private void DrawImages()
@@ -204,40 +212,30 @@ namespace NunuTheAICompanion.UI
             if (InputTextRef("Image Model", _cfg.ImageModel ?? string.Empty, out var modelNext))
             { _cfg.ImageModel = modelNext; _cfg.Save(); }
 
-            {
-                int steps = (int)_cfg.ImageSteps;
-                if (ImGui.SliderInt("Steps", ref steps, 1, 200))
-                { _cfg.ImageSteps = steps; _cfg.Save(); }
-            }
+            int steps = _cfg.ImageSteps;
+            if (ImGui.SliderInt("Steps", ref steps, 1, 200))
+            { _cfg.ImageSteps = steps; _cfg.Save(); }
 
             FloatSlider("CFG", _cfg.ImageGuidance, 0.0f, 30.0f, v => _cfg.ImageGuidance = v);
 
-            {
-                int w = (int)_cfg.ImageWidth;
-                if (ImGui.SliderInt("Width", ref w, 64, 2048))
-                { _cfg.ImageWidth = w; _cfg.Save(); }
-            }
+            int w = _cfg.ImageWidth;
+            if (ImGui.SliderInt("Width", ref w, 64, 2048))
+            { _cfg.ImageWidth = w; _cfg.Save(); }
 
-            {
-                int h = (int)_cfg.ImageHeight;
-                if (ImGui.SliderInt("Height", ref h, 64, 2048))
-                { _cfg.ImageHeight = h; _cfg.Save(); }
-            }
+            int h = _cfg.ImageHeight;
+            if (ImGui.SliderInt("Height", ref h, 64, 2048))
+            { _cfg.ImageHeight = h; _cfg.Save(); }
 
             if (InputTextRef("Sampler", _cfg.ImageSampler ?? string.Empty, out var samplerNext))
             { _cfg.ImageSampler = samplerNext; _cfg.Save(); }
 
-            {
-                int seedLocal = (int)_cfg.ImageSeed;
-                if (ImGui.InputInt("Seed", ref seedLocal))
-                { _cfg.ImageSeed = seedLocal; _cfg.Save(); }
-            }
+            int seedLocal = _cfg.ImageSeed;
+            if (ImGui.InputInt("Seed", ref seedLocal))
+            { _cfg.ImageSeed = seedLocal; _cfg.Save(); }
 
-            {
-                int itime = (int)_cfg.ImageTimeoutSec;
-                if (ImGui.SliderInt("Timeout (sec)", ref itime, 5, 300))
-                { _cfg.ImageTimeoutSec = itime; _cfg.Save(); }
-            }
+            int itime = _cfg.ImageTimeoutSec;
+            if (ImGui.SliderInt("Timeout (sec)", ref itime, 5, 300))
+            { _cfg.ImageTimeoutSec = itime; _cfg.Save(); }
 
             BoolCheckbox("Save images to disk", _cfg.SaveImages, v => _cfg.SaveImages = v);
 
@@ -266,17 +264,13 @@ namespace NunuTheAICompanion.UI
             ImGui.TextUnformatted("Environment Awareness");
             ImGui.Separator();
 
-            {
-                bool enabled = _cfg.EnvironmentEnabled;
-                if (ImGui.Checkbox("Enable", ref enabled))
-                { _cfg.EnvironmentEnabled = enabled; _cfg.Save(); }
-            }
+            bool enabled = _cfg.EnvironmentEnabled;
+            if (ImGui.Checkbox("Enable", ref enabled))
+            { _cfg.EnvironmentEnabled = enabled; _cfg.Save(); }
 
-            {
-                int tick = (int)_cfg.EnvTickSeconds;
-                if (ImGui.SliderInt("Tick (sec)", ref tick, 1, 10))
-                { _cfg.EnvTickSeconds = tick; _cfg.Save(); }
-            }
+            int tick = _cfg.EnvTickSeconds;
+            if (ImGui.SliderInt("Tick (sec)", ref tick, 1, 10))
+            { _cfg.EnvTickSeconds = tick; _cfg.Save(); }
 
             BoolCheckbox("Announce zone/duty changes", _cfg.EnvAnnounceOnChange, v => _cfg.EnvAnnounceOnChange = v);
 
