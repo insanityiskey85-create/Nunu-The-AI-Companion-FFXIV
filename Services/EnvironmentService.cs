@@ -1,99 +1,92 @@
 ﻿#nullable enable
-using Dalamud.Game.ClientState;
-using Dalamud.Game.Text.SeStringHandling;
 using Dalamud.Plugin.Services;
-using Lumina.Excel.GeneratedSheets;
-using System;
-using System.Text;
-
 namespace NunuTheAICompanion.Services
 {
     /// <summary>
-    /// Reads current territory, weather, and place names without ever using RowRef&lt;&gt;,
-    /// so you don't need a direct reference to Lumina.dll.
+    /// Environment snapshot that works even if Lumina.GeneratedSheets is not referenced.
+    /// If you later add the GeneratedSheets reference, define HAVE_LUMINA_GEN at the top of this file
+    /// (or as a project conditional symbol) to enable richer names.
     /// </summary>
     public sealed class EnvironmentService
     {
         private readonly IClientState _clientState;
         private readonly IDataManager _data;
+        private readonly IPluginLog _log;
 
-        public EnvironmentService(IClientState clientState, IDataManager data)
+        public EnvironmentService(IClientState clientState, IDataManager data, IPluginLog log)
         {
             _clientState = clientState;
             _data = data;
+            _log = log;
         }
 
-        public uint CurrentTerritoryId => _clientState.TerritoryType;
+        public record Snapshot(
+            uint TerritoryId,
+            string TerritoryName,
+            string PlaceName,
+            string ZoneName,
+            string WeatherName
+        );
 
-        public string CurrentTerritoryName =>
-            GetTerritoryName(_clientState.TerritoryType) ?? $"Territory#{_clientState.TerritoryType}";
-
-        public string? GetTerritoryName(uint territoryId)
+        public Snapshot GetSnapshot()
         {
-            var sheet = _data.GetExcelSheet<TerritoryType>();
-            var row = sheet?.GetRow(territoryId);
-            if (row == null)
-                return null;
+            var terrId = _clientState.TerritoryType;
 
-            // TerritoryType.PlaceName is a row ID; resolve to PlaceName
-            var placeNameText = ResolvePlaceName(row.PlaceName);
-            if (!string.IsNullOrEmpty(placeNameText))
-                return placeNameText;
-
-            // Fallbacks
-            if (!string.IsNullOrEmpty(row.Name?.ToString()))
-                return row.Name.ToString();
-
-            return null;
-        }
-
-        public string? ResolvePlaceName(uint placeNameRowId)
-        {
-            if (placeNameRowId == 0)
-                return null;
-
-            var sheet = _data.GetExcelSheet<PlaceName>();
-            var row = sheet?.GetRow(placeNameRowId);
-            return row?.Name?.ToString();
-        }
-
-        public string? ResolvePlaceName(ushort placeNameRowId)
-            => ResolvePlaceName((uint)placeNameRowId);
-
-        public string? GetWeatherName(uint weatherRowId)
-        {
-            if (weatherRowId == 0)
-                return null;
-
-            var sheet = _data.GetExcelSheet<Weather>();
-            var row = sheet?.GetRow(weatherRowId);
-            return row?.Name?.ToString();
-        }
-
-        /// <summary>
-        /// Build a short human string like "Gridania (Clear Skies)".
-        /// </summary>
-        public string DescribeLocation(uint? territoryIdOverride = null, uint? weatherIdOverride = null)
-        {
-            var terrId = territoryIdOverride ?? CurrentTerritoryId;
-            var terr = GetTerritoryName(terrId) ?? $"Territory#{terrId}";
-
-            string weather = "Unknown";
-            if (weatherIdOverride.HasValue)
+#if HAVE_LUMINA_GEN
+            try
             {
-                weather = GetWeatherName(weatherIdOverride.Value) ?? "Unknown";
+                // If you define HAVE_LUMINA_GEN and reference Lumina.Excel.GeneratedSheets,
+                // this richer path will be compiled.
+                var terr = _data.GetExcelSheet<Lumina.Excel.GeneratedSheets.TerritoryType>()?.GetRow(terrId);
+
+                string? TerritoryName() =>
+                    terr?.Name?.ToString()?.Trim() ??
+                    terr?.PlaceName.Value?.Name?.ToString()?.Trim();
+
+                string? PlaceName() =>
+                    terr?.PlaceName.Value?.Name?.ToString()?.Trim();
+
+                string? ZoneName() =>
+                    terr?.PlaceNameRegion.Value?.Name?.ToString()?.Trim()
+                    ?? terr?.PlaceNameZone.Value?.Name?.ToString()?.Trim()
+                    ?? PlaceName();
+
+                string WeatherName()
+                {
+                    try
+                    {
+                        var rate = terr?.WeatherRate.Value;
+                        var w = rate?.Weather[0].Value;
+                        return w?.Name?.ToString()?.Trim() ?? "Unknown Weather";
+                    }
+                    catch
+                    {
+                        return "Unknown Weather";
+                    }
+                }
+
+                return new Snapshot(
+                    TerritoryId: terrId,
+                    TerritoryName: TerritoryName() ?? "Unknown Territory",
+                    PlaceName:     PlaceName()     ?? "Unknown Place",
+                    ZoneName:      ZoneName()      ?? "Unknown Zone",
+                    WeatherName:   WeatherName()
+                );
             }
-            else
+            catch (Exception ex)
             {
-                // If you have your own weather tracker that yields a row id, call GetWeatherName(id) here.
-                // Otherwise leave as Unknown.
+                _log.Warning(ex, "Rich environment read failed; falling back to minimal data.");
             }
+#endif
 
-            return $"{terr} ({weather})";
+            // Minimal, dependency-free snapshot (always available)
+            return new Snapshot(
+                TerritoryId: terrId,
+                TerritoryName: $"Territory #{terrId}",
+                PlaceName: "Unknown Place",
+                ZoneName: "Unknown Zone",
+                WeatherName: "Unknown Weather"
+            );
         }
-
-        // Optional: util to get UTF-8 plain text with emojis stripped (if you need it).
-        public static string CleanSeString(SeString? s)
-            => s?.ToString() ?? string.Empty;
     }
 }

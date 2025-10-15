@@ -28,6 +28,10 @@ namespace NunuTheAICompanion.UI
             RespectCloseHotkey = true;
         }
 
+        public ConfigWindow(Configuration config)
+        {
+        }
+
         public override void Draw()
         {
             if (ImGui.BeginTabBar("nunu_cfg_tabs"))
