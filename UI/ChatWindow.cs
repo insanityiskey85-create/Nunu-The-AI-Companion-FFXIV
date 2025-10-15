@@ -264,7 +264,7 @@ namespace NunuTheAICompanion.UI
             if (ImGui.IsItemFocused() || ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows))
             {
                 bool ctrl = ImGui.GetIO().KeyCtrl;
-                if (ctrl && ImGui.IsKeyPressed((int)ImGuiKey.Enter, false))
+                if (ctrl && ImGui.IsKeyPressed((ImGuiKey)(int)ImGuiKey.Enter, false))
                     SubmitInput();
             }
 
