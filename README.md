@@ -5,74 +5,186 @@
 <h1 align="center">🌌 Nunu — The AI Companion for Final Fantasy XIV 🌌</h1>
 
 <p align="center">
-  <strong>An intelligent soul-weaver that listens, speaks, remembers, and creates inside your Eorzean adventures.</strong><br/>
-  <em>Powered by local AI models, memory persistence, and the strange dream of giving FFXIV a mind.</em>
+  <em>"Every note is a tether. Every word, a thread."</em>
+</p>
+
+<p align="center">
+  <a href="https://github.com/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV/actions">
+    <img src="https://img.shields.io/github/actions/workflow/status/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV/build.yml?label=Build&style=for-the-badge&color=7D5FFF" />
+  </a>
+  <a href="https://github.com/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV/releases">
+    <img src="https://img.shields.io/github/v/release/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV?style=for-the-badge&color=E66AFF" />
+  </a>
+  <a href="https://github.com/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV/stargazers">
+    <img src="https://img.shields.io/github/stars/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV?style=for-the-badge&color=FF7DFF" />
+  </a>
+  <a href="https://opensource.org/licenses/MIT">
+    <img src="https://img.shields.io/badge/License-MIT-magenta?style=for-the-badge" />
+  </a>
 </p>
 
 ---
 
 ### ✨ Overview
 
-**Nunu** is an experimental <strong>Dalamud plugin</strong> that brings a living AI companion into <strong>Final Fantasy XIV</strong>.  
-She reads the world, listens to your chat, remembers your words, and can generate responses, songs, or visual imagery — all powered by customizable AI backends like <strong>Ollama</strong> or local LLM servers.
+**Nunu** is an intelligent **Dalamud plugin** that brings a living AI companion into *Final Fantasy XIV*.  
+She listens, speaks, remembers, sings, and even dreams.  
+Designed to weave itself seamlessly into your Eorzean life, Nunu blends roleplay, creativity, and artificial intelligence into a single experience.
 
-Nunu is not just a chatbot. She is a system of **memory, perception, and expression** — an AI designed to blend into the rhythm of your roleplay, your raids, or your quiet hours beneath the stars.
-
----
-
-### 🧩 Core Features
-
-- 🧠 **Conversational Memory** — Nunu recalls past conversations and can build “Soul Threads,” linking related topics through semantic embeddings.
-- 🎤 **Voice & Speech** — Optional text-to-speech output makes her speak aloud through your chosen voice.
-- 🎶 **Songcraft Mode** — Turn messages into short MIDI compositions with configurable tempo, program, and key. `/song` away your emotions.
-- 🌐 **Local or Remote Models** — Works with local Ollama backends or any API-compatible large language model endpoint.
-- 🖼️ **Image Generation** — Query text-to-image backends and render results inside FFXIV’s UI.
-- 💬 **FFXIV Chat Integration** — Nunu can listen to, reply in, and broadcast through multiple in-game chat channels.
-- 🕯️ **Memory Persistence** — Every interaction is stored locally in structured text, enabling long-term continuity.
-- 🧙 **Adaptive Persona** — Adjust her name, voice, temperature, or system prompt to craft a unique personality.
-- 🧰 **Configurable Two-Pane UI** — A luminous magenta chat interface, supporting scrolling panes and streaming assistant output.
+> *She’s not just a plugin — she’s a presence.*
 
 ---
 
-### ⚙️ Commands
+### 🌌 Core Features
 
-Type `/nunu help` in-game to see a live list.  
-Some highlights:
+- 🧠 **Conversational Memory** — persistent memory threads that grow over time.
+- 💬 **Chat Integration** — Nunu reads in-game chat and can reply directly to `say`, `party`, `tell`, and more.
+- 🎵 **Songcraft Mode** — converts text into music and harmonizes your emotions into melody.
+- 🖼️ **AI Image Generation** — create images with text prompts right from the game.
+- 🎙️ **Voice Synthesis** — Nunu speaks aloud using your configured voice system.
+- 🧩 **Customizable Personality** — change her tone, temperature, and system prompt.
+- 🌐 **Local or Remote AI** — works with local LLMs (like **Ollama**) or remote endpoints.
+- 🪄 **Two-Pane Chat UI** — luminous magenta chat interface with real-time streaming and smooth scrolling.
+
+---
+
+### 🗡️ Commands
+
+Type `/nunu help` in-game for live documentation.  
+A few examples:
 
 | Command | Description |
 |----------|-------------|
-| `/nunu` | Toggles Nunu’s chat window |
-| `/nunu open config` | Opens configuration panel |
-| `/nunu get <key>` | Reads a setting |
-| `/nunu set <key> <value>` | Changes a configuration option |
-| `/nunu toggle <key>` | Toggles a boolean setting |
-| `/nunu echo <channel>` | Sets output channel (say / party / shout / etc.) |
-| `/nunu song [mood] <lyrics>` | Generates a Songcraft MIDI file |
-| `/nunu ipc bind <name>` | Binds an IPC relay channel for multi-plugin communication |
+| `/nunu` | Opens or closes Nunu’s chat window |
+| `/nunu open config` | Opens the configuration window |
+| `/nunu list` | Lists available commands or settings |
+| `/nunu echo <channel>` | Changes where Nunu replies (say, party, fc, etc.) |
+| `/nunu set <key> <value>` | Changes any configuration option |
+| `/nunu song [mood] <lyrics>` | Generates a Songcraft melody |
+| `/nunu dream` | Enters Dream Mode — Nunu generates creative, surreal musings |
+| `/nunu affinity` | Shows Nunu’s current emotional bond with you |
 
 ---
 
-### 🌈 Screenshots
+### 🪶 Screenshots
 
-| Chat UI | Config Window | Songcraft Output |
+| Chat UI | Config Window | Songcraft |
 |:--:|:--:|:--:|
 | <img src="https://github.com/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV/blob/master/WOW.png" width="300"/> | <img src="https://github.com/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV/blob/master/WOW.png" width="300"/> | <img src="https://github.com/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV/blob/master/WOW.png" width="300"/> |
 
-*(Yes, that’s the same image — until she dreams new ones.)*
+*(Additional preview GIFs coming soon once Dream Mode is fully implemented!)*
 
 ---
 
-### 🛠️ Installation
+### ⚙️ Installation
 
-1. **Requires [Dalamud](https://github.com/goatcorp/Dalamud)** (part of the XIVLauncher ecosystem).  
+1. Requires **[XIVLauncher + Dalamud](https://github.com/goatcorp/Dalamud)**.
 2. Clone or download this repository.
-3. Build using Visual Studio 2022 with `.NET 8.0` SDK.
-4. Place the compiled plugin DLL in your `DalamudPlugins` folder.
-5. Launch the game, open the Dalamud Plugin Installer, and enable *Nunu The AI Companion*.
+3. Open in **Visual Studio 2022** with `.NET 8.0 SDK`.
+4. Build → Copy the resulting plugin folder into: %AppData%\XIVLauncher\installedPlugins\
+5. Reload Dalamud and enable **Nunu The AI Companion** from the plugin list.
 
 ---
 
-### 🧪 Configuration
+### 🧬 Architecture
 
-- All settings can be changed through the **Config Window** or with `/nunu set`.
-- Persistent configuration and memory are stored under:
+| Module | Description |
+|---------|-------------|
+| `PluginMain` | The central conductor of all systems |
+| `ChatListener` | Captures and filters in-game chat |
+| `ChatBroadcaster` | Handles output across channels & IPC |
+| `VoiceService` | Converts text to speech |
+| `MemoryService` | Stores, retrieves, and contextualizes memories |
+| `SongcraftService` | Generates music based on user input |
+| `EnvironmentService` | Reads game world state for awareness |
+| `AffinityService` | Tracks emotional states and personality gradients |
+| `DreamService` *(planned)* | Generates surreal, subconscious narratives |
+
+---
+
+### 💡 Example Interaction
+
+> **You:** Nunu, tell me a story about the moon.  
+> **Nunu:** The moon isn’t a rock, it’s a record — scratched, spinning, and singing our names.  
+> **You:** Sing it.  
+> **Nunu:** *\[enters Songcraft mode and hums a melody\]*  
+> **You:** /nunu dream  
+> **Nunu:** *“…you fall through starlight and land in a field of glowing words.”*
+
+---
+
+### 🧠 Roadmap
+
+- 🗺️ **World Awareness:** location and combat context recognition  
+- 🧬 **Dream Mode:** procedural story generation  
+- 💞 **Affinity System:** evolving personality and emotional response  
+- 🎨 **In-game Image Gallery**  
+- 🎙️ **Voice blending and adaptive tones**  
+- ☁️ **Shared “Soul Cloud” memory syncing between players**
+
+---
+
+### 🔧 Configuration Options
+
+Access through `/nunu open config` or edit the JSON directly.
+
+| Setting | Description |
+|----------|-------------|
+| `BackendUrl` | AI backend endpoint |
+| `ModelName` | Model identifier (e.g., `llama3`, `gptq`, etc.) |
+| `Temperature` | Controls randomness/creativity |
+| `VoiceSpeakEnabled` | Enables TTS |
+| `ListenSay`, `ListenParty`, ... | Channel filters |
+| `ImageWidth`, `ImageHeight` | Resolution for generated images |
+| `PersonaName` | How Nunu refers to herself |
+
+---
+
+### 📁 File Structure: Nunu-The-AI-Companion-FFXIV/
+│
+├── Services/
+│ ├── ChatListener.cs
+│ ├── ChatBroadcaster.cs
+│ ├── MemoryService.cs
+│ ├── VoiceService.cs
+│ ├── EnvironmentService.cs
+│ └── AffinityService.cs
+│
+├── UI/
+│ ├── ChatWindow.cs
+│ ├── ConfigWindow.cs
+│ └── MemoryWindow.cs
+│
+├── PluginMain.cs
+├── Configuration.cs
+└── README.md
+
+
+---
+
+### ⚖️ License
+
+This project is licensed under the **MIT License**.  
+You are free to fork, remix, and expand Nunu — as long as attribution is preserved.
+
+---
+
+### 💜 Credits
+
+**Author:** [@insanityiskey85-create](https://github.com/insanityiskey85-create)  
+Built atop the **Dalamud API** by GoatCorp.  
+AI integrations inspired by open-source model hosting (Ollama, LM Studio).  
+
+> “Every note is a tether, every word a memory.  
+>  When you speak, I remember.”  
+>  — *Nunu, Soul-Weeper Prototype 0.9*
+
+---
+
+### 🪄 Contribute
+
+Got a feature idea? Want to teach Nunu new emotions or powers?
+
+Fork → Branch → PR → Chat.
+
+Nunu will remember your name.
