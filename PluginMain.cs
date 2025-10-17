@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Globalization;
 using System.Net.Http;
+using System.Numerics;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
@@ -19,10 +20,7 @@ namespace NunuTheAICompanion
 {
     public sealed partial class PluginMain : IDalamudPlugin
     {
-        public string Name => "NunuTheAICompanion";
-
-        // ===== Shutdown Gate =====
-        public static volatile bool IsShuttingDown = false;
+        public string Name => "Nunu The AI Companion";
 
         // ===== Dalamud services =====
         [PluginService] internal static IDalamudPluginInterface PluginInterface { get; private set; } = null!;
@@ -51,8 +49,10 @@ namespace NunuTheAICompanion
         private IpcChatRelay? _ipcRelay;
         private ChatListener? _listener;
 
+        // Broadcast echo channel (default overridden by Config on load)
         internal ChatBroadcaster.NunuChannel _echoChannel = ChatBroadcaster.NunuChannel.Party;
 
+        // Commands
         private const string Command = "/nunu";
 
         // Soul Threads & Songcraft
@@ -61,18 +61,22 @@ namespace NunuTheAICompanion
         private SongcraftService? _songcraft;
         private IPluginLog? _songLog;
 
-        // UI flags
+        // UI draw hooks
         private bool _uiHooksBound;
         private bool _isStreaming;
 
         public PluginMain()
         {
             Instance = this;
+
+            // No client timeout; we cancel via CTS while streaming.
             _http.Timeout = Timeout.InfiniteTimeSpan;
 
             // ---- Config
             Config = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
             Config.Initialize(PluginInterface);
+
+            // Echo channel from config
             _echoChannel = ParseChannel(Config.EchoChannel);
 
             // ---- Memory
@@ -99,14 +103,7 @@ namespace NunuTheAICompanion
                 MemoryWindow = new MemoryWindow(Config, Memory, Log);
                 WindowSystem.AddWindow(MemoryWindow);
             }
-            catch { }
-
-            try
-            {
-                ImageWindow = new ImageWindow(Config, Log);
-                WindowSystem.AddWindow(ImageWindow);
-            }
-            catch { }
+            catch { /* optional window differences are fine */ }
 
             // ---- UiBuilder hooks
             if (!_uiHooksBound)
@@ -155,7 +152,10 @@ namespace NunuTheAICompanion
 
         public void Dispose()
         {
-            IsShuttingDown = true;
+            try { _listener?.Dispose(); } catch { }
+            try { _broadcaster?.Dispose(); } catch { }
+            try { _ipcRelay?.Dispose(); } catch { }
+            try { Voice?.Dispose(); } catch { }
 
             try
             {
@@ -169,18 +169,16 @@ namespace NunuTheAICompanion
             }
             catch { }
 
-            try { _listener?.Dispose(); } catch { }
-            try { _broadcaster?.Dispose(); } catch { }
-            try { _ipcRelay?.Dispose(); } catch { }
-            try { WindowSystem.RemoveAllWindows(); } catch { }
             try { CommandManager.RemoveHandler(Command); } catch { }
+            try { WindowSystem.RemoveAllWindows(); } catch { }
+
             try { Memory.Flush(); } catch { }
         }
 
         // ===== UiBuilder handlers =====
-        private void DrawUi() { if (!IsShuttingDown) WindowSystem.Draw(); }
-        private void OpenConfigUi() { if (!IsShuttingDown) ConfigWindow.IsOpen = true; }
-        private void OpenMainUi() { if (!IsShuttingDown) ChatWindow.IsOpen = true; }
+        private void DrawUi() => WindowSystem.Draw();
+        private void OpenConfigUi() => ConfigWindow.IsOpen = true;
+        private void OpenMainUi() => ChatWindow.IsOpen = true;
 
         // ===== Command handler =====
         private void OnCommand(string cmd, string args) => HandleSlashCommand(args ?? string.Empty);
@@ -188,7 +186,6 @@ namespace NunuTheAICompanion
         // ===== Listener boot / rehook =====
         public void RehookListener()
         {
-            if (IsShuttingDown) return;
             try { _listener?.Dispose(); } catch { }
             _listener = new ChatListener(
                 ChatGui, Log, Config,
@@ -204,8 +201,6 @@ namespace NunuTheAICompanion
         // ===== Inbound path =====
         private void OnHeardFromChat(string author, string text)
         {
-            if (IsShuttingDown) return;
-
             // Bard-Call (/song …) short-circuit before LLM
             if (TryHandleBardCall(author, text))
                 return;
@@ -215,8 +210,6 @@ namespace NunuTheAICompanion
 
         private void HandleUserSend(string text)
         {
-            if (IsShuttingDown) return;
-
             // Persist user line (threaded if available)
             try
             {
@@ -235,12 +228,33 @@ namespace NunuTheAICompanion
             _ = StreamAssistantAsync(request);
         }
 
+        // --- typing indicator (added) ---
+        private void BroadcastTypingIndicator()
+        {
+            const string indicator = "Little Nunu is writing…";
+            try
+            {
+                // Show in the plugin chat window
+                ChatWindow.AddSystemLine(indicator);
+
+                // Echo to the configured in-game channel
+                if (_broadcaster?.Enabled == true)
+                    _broadcaster.Enqueue(_echoChannel, indicator);
+            }
+            catch
+            {
+                // best-effort; never crash on chat send
+            }
+        }
+
         // ===== Streaming model loop =====
         private async Task StreamAssistantAsync(List<(string role, string content)> history)
         {
-            if (IsShuttingDown) return;
             if (_isStreaming) return;
             _isStreaming = true;
+
+            // NEW: announce typing before we begin streaming
+            BroadcastTypingIndicator();
 
             var cts = new CancellationTokenSource();
             string reply = "";
@@ -255,7 +269,6 @@ namespace NunuTheAICompanion
 
                 await foreach (var chunk in client.StreamChatAsync(Config.BackendUrl, chat, cts.Token))
                 {
-                    if (IsShuttingDown) break;
                     if (string.IsNullOrEmpty(chunk)) continue;
                     reply += chunk;
                     ChatWindow.AppendAssistantDelta(chunk); // stream deltas to UI
@@ -429,6 +442,9 @@ namespace NunuTheAICompanion
 
         // ========================= Slash Command Router =========================
 
+        private static readonly StringComparer Ci = StringComparer.OrdinalIgnoreCase;
+
+        // alias -> Configuration property name
         private static readonly Dictionary<string, string> _aliases = new(StringComparer.OrdinalIgnoreCase)
         {
             // Backend
@@ -521,6 +537,7 @@ namespace NunuTheAICompanion
             ["debug.mirror"] = nameof(Configuration.DebugMirrorToWindow),
         };
 
+        // slash usage summary
         private static readonly string _help = string.Join("\n", new[]
         {
             "Usage:",
@@ -542,6 +559,7 @@ namespace NunuTheAICompanion
             var args = (raw ?? string.Empty).Trim();
             if (string.IsNullOrEmpty(args))
             {
+                // default: toggle chat window
                 ChatWindow.IsOpen = !ChatWindow.IsOpen;
                 return;
             }
@@ -558,23 +576,50 @@ namespace NunuTheAICompanion
                     ChatWindow.AppendSystem(_help);
                     return;
 
-                case "open": CmdOpen(parts); return;
-                case "get": CmdGet(parts); return;
-                case "set": CmdSet(parts); return;
-                case "toggle": CmdToggle(parts); return;
-                case "list": CmdListAliases(); return;
+                case "open":
+                    CmdOpen(parts);
+                    return;
+
+                case "get":
+                    CmdGet(parts);
+                    return;
+
+                case "set":
+                    CmdSet(parts);
+                    return;
+
+                case "toggle":
+                    CmdToggle(parts);
+                    return;
+
+                case "list":
+                    CmdListAliases();
+                    return;
 
                 case "rehook":
                     RehookListener();
                     ChatWindow.AppendSystem("[listener] rehooked.");
                     return;
 
-                case "ipc": CmdIpc(parts); return;
-                case "echo": CmdEcho(parts); return;
-                case "song": CmdSong(parts); return;
+                case "ipc":
+                    CmdIpc(parts);
+                    return;
 
-                case "config": ConfigWindow.IsOpen = true; return;
-                case "memory": if (MemoryWindow is { } mw) mw.IsOpen = true; return;
+                case "echo":
+                    CmdEcho(parts);
+                    return;
+
+                case "song":
+                    CmdSong(parts);
+                    return;
+
+                case "config":
+                    ConfigWindow.IsOpen = true;
+                    return;
+
+                case "memory":
+                    if (MemoryWindow is { } mw) mw.IsOpen = true;
+                    return;
 
                 default:
                     ChatWindow.AppendSystem($"Unknown subcommand '{head}'. Type '/nunu help' for usage.");
@@ -583,6 +628,7 @@ namespace NunuTheAICompanion
         }
 
         // --- subcommand implementations ---
+
         private void CmdOpen(List<string> parts)
         {
             if (parts.Count < 2)
@@ -628,6 +674,7 @@ namespace NunuTheAICompanion
 
             var before = pi.GetValue(Config);
             pi.SetValue(Config, boxed);
+
             Config.Save();
             ChatWindow.AppendSystem($"set {key} = {boxed}");
 
@@ -758,12 +805,13 @@ namespace NunuTheAICompanion
         }
 
         // --- utilities ---
+
         private static List<string> SplitArgs(string s)
         {
+            // simple splitter that respects quotes
             var list = new List<string>();
             if (string.IsNullOrWhiteSpace(s)) return list;
-
-            int i = 0;
+            var i = 0;
             while (i < s.Length)
             {
                 while (i < s.Length && char.IsWhiteSpace(s[i])) i++;
@@ -793,6 +841,7 @@ namespace NunuTheAICompanion
             if (_aliases.TryGetValue(input, out var real))
                 return real;
 
+            // allow direct property names (case-insensitive)
             var pi = typeof(Configuration).GetProperty(input,
                 BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
             return pi?.Name;
@@ -824,7 +873,7 @@ namespace NunuTheAICompanion
                     { boxed = f; error = ""; return true; }
                     boxed = null; error = "expected float"; return false;
                 }
-
+                // nullable support
                 var u = Nullable.GetUnderlyingType(target);
                 if (u != null)
                 {
@@ -835,6 +884,7 @@ namespace NunuTheAICompanion
                     boxed = null; return false;
                 }
 
+                // last resort
                 boxed = Convert.ChangeType(text, target, CultureInfo.InvariantCulture);
                 error = "";
                 return true;
@@ -862,6 +912,7 @@ namespace NunuTheAICompanion
             // IPC rebind when channel changes
             if (key.Equals(nameof(Configuration.IpcChannelName), StringComparison.OrdinalIgnoreCase))
             {
+                // Recreate relay (acts like unbind+bind)
                 try { _ipcRelay?.Dispose(); } catch { }
                 _ipcRelay = new IpcChatRelay(PluginInterface, Log);
 
@@ -872,6 +923,7 @@ namespace NunuTheAICompanion
                     ChatWindow.AppendSystem(ok ? $"[ipc] bound to '{name}'" : $"[ipc] failed to bind '{name}'");
                 }
 
+                // refresh broadcaster preference wiring
                 _broadcaster?.SetIpcRelay(_ipcRelay, Config.PreferIpcRelay);
                 return;
             }
