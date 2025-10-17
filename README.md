@@ -7,6 +7,15 @@
 <p align="center">
   <em>"Every note is a tether. Every word, a thread."</em>
 </p>
+<p align="center">
+  <img src="https://raw.githubusercontent.com/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV/master/WOW.png" width="100%" alt="Nunu The AI Companion Banner"/>
+</p>
+
+<h2 align="center">🌌 Nunu — The AI Companion for FFXIV</h2>
+<p align="center">
+  A soul-threaded AI that listens, learns, sings, dreams, and remembers.  
+  Powered by curiosity, crafted with magic.
+</p>
 
 <p align="center">
   <a href="https://github.com/insanityiskey85-create/Nunu-The-AI-Companion-FFXIV/actions">
