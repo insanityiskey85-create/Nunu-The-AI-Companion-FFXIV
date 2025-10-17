@@ -20,7 +20,10 @@ namespace NunuTheAICompanion
 {
     public sealed partial class PluginMain : IDalamudPlugin
     {
-        public string Name => "Nunu The AI Companion";
+        public string Name => "NunuTheAICompanion";
+
+        // ===== Shutdown flag for UI safety =====
+        public static bool IsShuttingDown { get; private set; } = false;
 
         // ===== Dalamud services =====
         [PluginService] internal static IDalamudPluginInterface PluginInterface { get; private set; } = null!;
@@ -67,6 +70,9 @@ namespace NunuTheAICompanion
 
         public PluginMain()
         {
+            // reset the global shutdown flag at boot
+            IsShuttingDown = false;
+
             Instance = this;
 
             // No client timeout; we cancel via CTS while streaming.
@@ -152,6 +158,9 @@ namespace NunuTheAICompanion
 
         public void Dispose()
         {
+            // signal all UI to early-out
+            IsShuttingDown = true;
+
             try { _listener?.Dispose(); } catch { }
             try { _broadcaster?.Dispose(); } catch { }
             try { _ipcRelay?.Dispose(); } catch { }
@@ -213,7 +222,7 @@ namespace NunuTheAICompanion
             // Persist user line (threaded if available)
             try
             {
-                var who = string.IsNullOrWhiteSpace(Config.ChatDisplayName) ? "You" : Config.ChatDisplayName;
+                var who = string.IsNullOrWhiteSpace(Config.ChatDisplayName) ? "@Architect (Real Nunu)" : Config.ChatDisplayName;
                 OnUserUtterance(who, text, CancellationToken.None);
             }
             catch { /* best-effort */ }
@@ -231,7 +240,7 @@ namespace NunuTheAICompanion
         // --- typing indicator (added) ---
         private void BroadcastTypingIndicator()
         {
-            const string indicator = "Little Nunu is writing…";
+            const string indicator = "Little Nunu is writing… Please be Patient WAH!";
             try
             {
                 // Show in the plugin chat window

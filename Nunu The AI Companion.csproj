@@ -8,7 +8,7 @@
 		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 
 		<!-- Plugin packaging metadata (adjust as needed) -->
-		<AssemblyName>Nunu The AI Companion</AssemblyName>
+		<AssemblyName>NunuTheAICompanion</AssemblyName>
 		<RootNamespace>NunuTheAICompanion</RootNamespace>
 		<Version>1.0.3.7</Version>
 	</PropertyGroup>
